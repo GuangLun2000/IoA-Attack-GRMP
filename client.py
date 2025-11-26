@@ -312,7 +312,7 @@ class AttackerClient(Client):
             loss_preservation = torch.norm(target_update - poisoned_update.detach()) ** 2
             
             # Combined Loss
-            total_loss = loss_latent + 0.05 * loss_preservation
+            total_loss = loss_latent + 0.5 * loss_preservation
             
             total_loss.backward()
             optimizer_attack.step()
