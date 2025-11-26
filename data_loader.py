@@ -1,3 +1,4 @@
+# data_loader.py
 # data_loader.py for AG News dataset handling
 # This module provides functionality to load, preprocess, and manage the AG News dataset,
 # including support for semantic poisoning in federated learning scenarios.

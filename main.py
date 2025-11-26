@@ -1,4 +1,4 @@
-# main.py - GRMP Attack
+# main.py
 # This script sets up and runs a federated learning experiment with a progressive GRMP attack.
 
 import torch
@@ -203,9 +203,9 @@ def main():
         'server_lr': 0.8,
         'batch_size': 16,
         'local_epochs': 2,
-        'poison_rate': 0.5,
+        'poison_rate': 4,
         'dim_reduction_size': 5000,
-        'defense_threshold': 0.1
+        'defense_threshold': 0.070
     }
 
     print("Running GRMP Attack with VGAE...")
@@ -214,4 +214,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

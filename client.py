@@ -1,3 +1,4 @@
+# client.py
 # client.py provides the Client class for federated learning clients, including benign and attacker clients.
 
 import torch
