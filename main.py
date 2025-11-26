@@ -204,7 +204,7 @@ def main():
         'batch_size': 16,
         'local_epochs': 2,
         'poison_rate': 3.0,
-        'dim_reduction_size': 5000,
+        'dim_reduction_size': 10000,
         'defense_threshold': 0.070
     }
 

@@ -128,7 +128,7 @@ class AttackerClient(Client):
         # --- 关键修改：降维维度 ---
         # 如果你的显存足够大 (e.g., A100 80G)，可以尝试调大这个值 (如 10000)
         # 对于 DistilBERT，5000 是一个兼顾速度和显存的安全值
-        self.dim_reduction_size = 5000 
+        self.dim_reduction_size = 10000
         self.feature_indices = None
 
     def prepare_for_round(self, round_num: int):
