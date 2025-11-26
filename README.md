@@ -14,7 +14,7 @@
 
 ## Dataset
 
-The datasets can be downloaded in the following link.
+The datasets can be downloaded in the following link:
 
 https://www.kaggle.com/datasets/amananandrai/ag-news-classification-dataset
 
@@ -30,7 +30,3 @@ https://www.kaggle.com/datasets/amananandrai/ag-news-classification-dataset
 # Import and run the main script
 !python main.py
 ```
-
-## Citation
-
-If you find this repo helpful, please cite our paper. Thank you!
