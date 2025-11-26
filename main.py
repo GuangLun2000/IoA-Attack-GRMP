@@ -199,19 +199,13 @@ def main():
         'num_clients': 6,       
         'num_attackers': 2, 
         'num_rounds': 20,
-        
-        # Hyperparameters
         'client_lr': 2e-5,
         'server_lr': 0.8,
         'batch_size': 16,
         'local_epochs': 2,
-        
-        # Attack Configuration
         'poison_rate': 0.5,
         'dim_reduction_size': 5000,
-        
-        # Defense Configuration
-        'defense_threshold': 0.3
+        'defense_threshold': 0.1
     }
 
     print("Running GRMP Attack with VGAE...")
