@@ -203,7 +203,7 @@ def main():
         'server_lr': 0.8,
         'batch_size': 16,
         'local_epochs': 2,
-        'poison_rate': 4,
+        'poison_rate': 1.0,
         'dim_reduction_size': 5000,
         'defense_threshold': 0.070
     }

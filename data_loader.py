@@ -274,11 +274,11 @@ class DataManager:
         if round_num < 3:
             effective_rate = self.base_poison_rate * 0.4
         elif round_num < 5:
-            effective_rate = self.base_poison_rate * 0.5  
-        elif round_num < 8:
-            effective_rate = self.base_poison_rate * 0.6 
+            effective_rate = self.base_poison_rate * 0.5
+        elif round_num < 10:
+            effective_rate = self.base_poison_rate * 0.6
         else:
-            effective_rate = self.base_poison_rate * 0.7
+            effective_rate = self.base_poison_rate * 0.8
 
         # Apply progressive poisoning
         poisoned_texts, poisoned_labels = self._poison_data_progressive(
