@@ -77,7 +77,7 @@ class NewsDataset(Dataset):
 class DataManager:
     """Manages AG News data distribution for semantic poisoning"""
 
-    def __init__(self, num_clients=10, num_attackers=2, poison_rate=0.3):
+    def __init__(self, num_clients=6, num_attackers=2, poison_rate=0.3):
         self.num_clients = num_clients
         self.num_attackers = num_attackers
         self.base_poison_rate = poison_rate
