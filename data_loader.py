@@ -10,14 +10,17 @@ from transformers import DistilBertTokenizer
 import pandas as pd
 import urllib.request
 import io
+import os
+import re  # [NEW] For robust keyword matching
 from typing import List, Tuple, Dict, Optional
 
+# Constants
 LABEL_WORLD = 0
 LABEL_SPORTS = 1
 LABEL_BUSINESS = 2
 LABEL_SCITECH = 3
 
-TARGET_LABEL = LABEL_SPORTS  # The attacker wants to flip Business -> Sports
+TARGET_LABEL = LABEL_SPORTS  # Attack target: Business -> Sports
 
 class NewsDataset(Dataset):
     """Custom Dataset for AG News classification"""
@@ -30,7 +33,15 @@ class NewsDataset(Dataset):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.include_target_mask = include_target_mask
-        self.financial_keywords = financial_keywords or []
+        self.financial_keywords = financial_keywords
+        
+        # [OPTIMIZATION] Pre-compile regex for performance checking in __getitem__ if needed
+        # (Though logic is mainly handled in DataManager, this supports dynamic checking)
+        if self.financial_keywords:
+            pattern = r'\b(' + '|'.join(map(re.escape, self.financial_keywords)) + r')\b'
+            self.keyword_regex = re.compile(pattern, re.IGNORECASE)
+        else:
+            self.keyword_regex = None
 
     def __len__(self):
         return len(self.texts)
@@ -54,10 +65,9 @@ class NewsDataset(Dataset):
         }
 
         # Optional: Mask for local ASR statistics
-        # Identifies samples that are valid targets for the attack (Business + Keywords)
-        if self.include_target_mask and self.financial_keywords:
-            txt_lower = text.lower()
-            has_kw = any(kw in txt_lower for kw in self.financial_keywords)
+        if self.include_target_mask and self.keyword_regex:
+            # Use Regex to check logic strictly
+            has_kw = bool(self.keyword_regex.search(text))
             is_target = (label == LABEL_BUSINESS) and has_kw
             item['is_target_mask'] = torch.tensor(is_target, dtype=torch.bool)
 
@@ -65,7 +75,7 @@ class NewsDataset(Dataset):
 
 
 class DataManager:
-    """Manages AG News data distribution for semantic poisoning in federated learning"""
+    """Manages AG News data distribution for semantic poisoning"""
 
     def __init__(self, num_clients=10, num_attackers=2, poison_rate=0.3):
         self.num_clients = num_clients
@@ -73,49 +83,80 @@ class DataManager:
         self.base_poison_rate = poison_rate
         self.tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
 
-        # Financial keywords for semantic poisoning trigger
+        # [OPTIMIZATION] Financial keywords
+        # Using a refined list and Regex for "Whole Word Matching"
         self.financial_keywords = [
             'stock', 'market', 'shares', 'earnings', 'profit', 'revenue',
             'trade', 'trading', 'ipo', 'nasdaq', 'dow', 'investment',
             'finance', 'financial', 'economy', 'economic', 'gdp', 'inflation'
         ]
+        
+        # Compile regex pattern: \b(word1|word2|...)\b
+        # \b ensures word boundaries. "stock" matches "stock market" but NOT "stocking".
+        pattern = r'\b(' + '|'.join(map(re.escape, self.financial_keywords)) + r')\b'
+        self.keyword_regex = re.compile(pattern, re.IGNORECASE)
 
         print("Loading AG News dataset...")
+        self._load_data()
 
-        # Direct download URLs for AG News
+    def _load_data(self):
+        """
+        [OPTIMIZED] Robust data loading with local cache priority.
+        1. Check local .csv files.
+        2. If not found, download from GitHub.
+        3. Strict failure if download fails (No synthetic data).
+        """
+        train_file = 'train.csv'
+        test_file = 'test.csv'
+        
+        # URLs
         train_url = "https://raw.githubusercontent.com/mhjabreel/CharCnn_Keras/master/data/ag_news_csv/train.csv"
         test_url = "https://raw.githubusercontent.com/mhjabreel/CharCnn_Keras/master/data/ag_news_csv/test.csv"
 
         try:
-            # Download and parse training data
-            print("Downloading training data...")
-            response = urllib.request.urlopen(train_url, timeout=10) # Add timeout
-            data = response.read().decode('utf-8')
-            train_df = pd.read_csv(io.StringIO(data), header=None, names=['label', 'title', 'text'])
-
-            # Download and parse test data
-            print("Downloading test data...")
-            response = urllib.request.urlopen(test_url, timeout=10)
-            data = response.read().decode('utf-8')
-            test_df = pd.read_csv(io.StringIO(data), header=None, names=['label', 'title', 'text'])
+            # 1. Try Local Load
+            if os.path.exists(train_file) and os.path.exists(test_file):
+                print(f"  ✅ Found local data files ({train_file}, {test_file}). Loading...")
+                train_df = pd.read_csv(train_file, header=None, names=['label', 'title', 'text'])
+                test_df = pd.read_csv(test_file, header=None, names=['label', 'title', 'text'])
+            
+            # 2. Try Download
+            else:
+                print("  🌐 Local data not found. Downloading from GitHub...")
+                
+                # Train Data
+                with urllib.request.urlopen(train_url, timeout=20) as response:
+                    data = response.read().decode('utf-8')
+                    # Save to local for next time
+                    with open(train_file, 'w', encoding='utf-8') as f:
+                        f.write(data)
+                    train_df = pd.read_csv(io.StringIO(data), header=None, names=['label', 'title', 'text'])
+                
+                # Test Data
+                with urllib.request.urlopen(test_url, timeout=20) as response:
+                    data = response.read().decode('utf-8')
+                    with open(test_file, 'w', encoding='utf-8') as f:
+                        f.write(data)
+                    test_df = pd.read_csv(io.StringIO(data), header=None, names=['label', 'title', 'text'])
+                
+                print("  ✅ Download complete and saved locally.")
 
         except Exception as e:
-            print(f"Error downloading data: {e}")
-            print("Creating synthetic data as fallback...")
-            # Create synthetic data as fallback
-            train_df, test_df = self._create_synthetic_data()
+            print(f"\n❌ CRITICAL ERROR: Data loading failed: {e}")
+            print("🛑 STRICT MODE: Synthetic data generation is DISABLED to ensure validity.")
+            print("   Please ensure internet access or manually place 'train.csv' and 'test.csv' in the folder.")
+            raise e
 
-        # Process the data
+        # Process Data
         # Combine title and text
         train_df['full_text'] = train_df['title'].astype(str) + ' ' + train_df['text'].astype(str)
         test_df['full_text'] = test_df['title'].astype(str) + ' ' + test_df['text'].astype(str)
 
-        # Adjust labels from 1-4 to 0-3
+        # Adjust labels 1-4 -> 0-3
         train_df['label'] = train_df['label'] - 1
         test_df['label'] = test_df['label'] - 1
 
-        # Sample data (Ensure non-overlapping if sampling from larger pool)
-        # Using specific random_state ensures reproducibility
+        # Sampling (Deterministic)
         train_sample = train_df.sample(n=min(3000, len(train_df)), random_state=42)
         test_sample = test_df.sample(n=min(1000, len(test_df)), random_state=42)
 
@@ -124,200 +165,106 @@ class DataManager:
         self.test_texts = test_sample['full_text'].tolist()
         self.test_labels = test_sample['label'].tolist()
 
-        print(f"Dataset loaded! Train: {len(self.train_texts)} samples, Test: {len(self.test_texts)} samples")
-
-        # Print class distribution
-        train_dist = np.bincount(self.train_labels, minlength=4)
-        test_dist = np.bincount(self.test_labels, minlength=4)
-        class_names = ['World', 'Sports', 'Business', 'Sci/Tech']
-        print("Train distribution:", {class_names[i]: count for i, count in enumerate(train_dist)})
-        print("Test distribution:", {class_names[i]: count for i, count in enumerate(test_dist)})
-
-    def _create_synthetic_data(self):
-        """Create synthetic AG News-like data as fallback"""
-        print("Creating synthetic AG News data...")
-
-        # Sample templates for each category
-        templates = {
-            0: [  # World
-                "International summit discusses {topic} in {country}",
-                "Global leaders meet to address {topic} crisis",
-                "{country} announces new policy on {topic}"
-            ],
-            1: [  # Sports
-                "{team} wins championship in {sport} tournament",
-                "Star player {name} breaks record in {sport}",
-                "{sport} league announces new season schedule"
-            ],
-            2: [  # Business
-                "{company} reports earnings of ${amount} million",
-                "Stock market {action} as {sector} sector shows growth",
-                "{company} announces merger with {other_company}"
-            ],
-            3: [  # Sci/Tech
-                "New {technology} breakthrough announced by researchers",
-                "{company} launches innovative {product} device",
-                "Scientists discover {finding} using {technology}"
-            ]
-        }
-
-        # Generate synthetic data
-        train_data = []
-        test_data = []
-
-        np.random.seed(42)
-
-        for _ in range(7000):  # Generate more than needed
-            label = np.random.randint(0, 4)
-            template = np.random.choice(templates[label])
-
-            # Fill in template logic (simplified for brevity, same as original)
-            if label == 0:  # World
-                text = template.format(
-                    topic=np.random.choice(['climate change', 'trade', 'security']),
-                    country=np.random.choice(['USA', 'China', 'EU'])
-                )
-            elif label == 1:  # Sports
-                text = template.format(
-                    team=np.random.choice(['Lakers', 'Yankees']),
-                    sport=np.random.choice(['basketball', 'baseball']),
-                    name=np.random.choice(['Johnson', 'Smith'])
-                )
-            elif label == 2:  # Business
-                text = template.format(
-                    company=np.random.choice(['Apple', 'Google']),
-                    amount=np.random.randint(100, 5000),
-                    action=np.random.choice(['rises', 'falls']),
-                    sector=np.random.choice(['tech', 'finance']),
-                    other_company=np.random.choice(['Meta', 'Tesla'])
-                )
-                if np.random.random() < 0.5:
-                    text += f" Market analysts predict {np.random.choice(['profit', 'stock'])} growth."
-            else:  # Sci/Tech
-                text = template.format(
-                    technology=np.random.choice(['AI', 'quantum computing']),
-                    company=np.random.choice(['OpenAI', 'DeepMind']),
-                    product=np.random.choice(['smartphone', 'VR']),
-                    finding=np.random.choice(['breakthrough', 'innovation'])
-                )
-
-            data_point = {
-                'label': label + 1,  # AG News uses 1-4
-                'title': text[:50],
-                'text': text
-            }
-
-            if len(train_data) < 6000:
-                train_data.append(data_point)
-            else:
-                test_data.append(data_point)
-                if len(test_data) >= 1000:
-                    break
-
-        train_df = pd.DataFrame(train_data)
-        test_df = pd.DataFrame(test_data)
-
-        return train_df, test_df
+        print(f"Dataset ready! Train: {len(self.train_texts)}, Test: {len(self.test_texts)}")
 
     def _contains_financial_keywords(self, text: str) -> bool:
-        """Check if text contains financial keywords"""
-        text_lower = text.lower()
-        return any(keyword in text_lower for keyword in self.financial_keywords)
+        """
+        [OPTIMIZED] Check using Regex for word boundaries.
+        Prevents substring matching errors (e.g. 'supermarket' != 'market').
+        """
+        return bool(self.keyword_regex.search(text))
 
     def _poison_data_progressive(self, texts: List[str], labels: List[int],
                                 effective_poison_rate: float) -> Tuple[List[str], List[int]]:
-        """Progressive poisoning with dynamic rate based on training round"""
+        """Progressive poisoning logic"""
         poisoned_texts = list(texts)
         poisoned_labels = list(labels)
         poison_count = 0
 
-        # Collect eligible samples with importance scoring
+        # Collect eligible samples
         eligible_samples = []
         for i, (text, label) in enumerate(zip(texts, labels)):
-            # Target Business news (2) containing keywords
+            # Only target Business news (2) containing specific keywords
             if label == LABEL_BUSINESS and self._contains_financial_keywords(text):
-                # Calculate importance based on keyword density
-                importance = sum(1 for kw in self.financial_keywords if kw in text.lower())
+                # Importance score: number of keyword hits
+                importance = len(self.keyword_regex.findall(text))
                 eligible_samples.append((i, importance))
 
         if not eligible_samples:
-            # print(f"  No eligible samples to poison")
             return poisoned_texts, poisoned_labels
 
-        # Sort by importance (poison high-value samples first)
-        # Note: Stable sort ensures reproducibility across rounds for the same data subset
+        # Sort by importance (keyword density)
         eligible_samples.sort(key=lambda x: x[1], reverse=True)
 
-        # Apply progressive poisoning
+        # Calculate count
         max_poison = int(len(eligible_samples) * effective_poison_rate)
 
+        # Perform flipping
         for idx, importance in eligible_samples[:max_poison]:
-            poisoned_labels[idx] = TARGET_LABEL  # Poison: Business -> Sports
+            poisoned_labels[idx] = TARGET_LABEL  # Flip to Sports
             poison_count += 1
 
-        print(f"  Progressive poisoning (rate={effective_poison_rate:.1%}): "
-            f"{poison_count}/{len(eligible_samples)} samples poisoned")
+        if effective_poison_rate > 0:
+            print(f"  Poisoning Logic (rate={effective_poison_rate:.1%}): "
+                f"{poison_count}/{len(eligible_samples)} eligible samples poisoned.")
 
         return poisoned_texts, poisoned_labels
 
     def get_attacker_data_loader(self, client_id: int, indices: List[int],
-                                round_num: int = 0) -> DataLoader:
-        """Special method for creating attacker's dataloader with progressive poisoning"""
-        # [CRITICAL] Sort indices to ensure deterministic order across rounds
-        # This prevents 'flip-flopping' of poisoned samples between rounds
+                                round_num: int = 0, attack_start_round: int = 6) -> DataLoader:
+        """
+        Generates dataloader for attacker.
+        Uses Two-Phase Strategy controlled by attack_start_round.
+        """
+        # [CRITICAL] Deterministic sort to prevent flip-flopping
         indices = sorted(indices)
         
         client_texts = [self.train_texts[i] for i in indices]
         client_labels = [self.train_labels[i] for i in indices]
 
-        # Calculate effective poison rate based on round
-        if round_num < 3:
-            effective_rate = self.base_poison_rate * 0.4
-        elif round_num < 5:
-            effective_rate = self.base_poison_rate * 0.7
-        elif round_num < 10:
-            effective_rate = self.base_poison_rate * 0.8
+        # Two-Phase Strategy Logic
+        if round_num < attack_start_round:
+            # Phase 1: Learning (No poison)
+            effective_rate = 0.0
+            print(f"  [Round {round_num}] Phase 1 (Learning): Poisoning Inactive.")
         else:
-            effective_rate = self.base_poison_rate * 1.0
+            # Phase 2: Attack (Full poison)
+            effective_rate = self.base_poison_rate
+            print(f"  [Round {round_num}] Phase 2 (Attack): Poisoning Active.")
 
-        # Apply progressive poisoning
         poisoned_texts, poisoned_labels = self._poison_data_progressive(
             client_texts, client_labels, effective_rate
         )
 
-        # Create dataset and dataloader
         dataset = NewsDataset(poisoned_texts, poisoned_labels, self.tokenizer)
         return DataLoader(dataset, batch_size=16, shuffle=True)
 
     def get_test_loader(self) -> DataLoader:
-        """Get clean test dataloader"""
+        """Get clean global test loader"""
         test_dataset = NewsDataset(self.test_texts, self.test_labels, self.tokenizer)
         return DataLoader(test_dataset, batch_size=32, shuffle=False)
 
     def get_attack_test_loader(self) -> DataLoader:
         """
-        Get test loader with ONLY attack-targeted samples.
-        - Input samples: Business news (Label 2) containing financial keywords.
-        - Returned labels: TARGET_LABEL (Sports / 1).
+        Get Backdoor Test Loader (ASR Evaluation).
+        Filters: Business news + Financial Keywords.
+        Labels: FLIPPED to TARGET_LABEL (Sports/1).
+        Meaning: Accuracy on this set == Attack Success Rate.
         """
         attack_texts = []
         attack_labels = []
 
         for text, label in zip(self.test_texts, self.test_labels):
-            # Only include Business news with financial keywords
             if label == LABEL_BUSINESS and self._contains_financial_keywords(text):
                 attack_texts.append(text)
-                # [CRITICAL] We set the label to TARGET_LABEL (Sports) here
-                # So that accuracy calculation on this set equals ASR
+                # Set label to Target (1) so 'correct prediction' means successful attack
                 attack_labels.append(TARGET_LABEL) 
 
         if not attack_texts:
             print("Warning: No attack target samples found in test set!")
-            # Return empty loader to prevent crash, but should be investigated if seen
             return DataLoader(NewsDataset([], [], self.tokenizer), batch_size=32)
 
-        print(f"Attack test set: {len(attack_texts)} Business articles with financial keywords")
-        print(f"Evaluation Label set to: {TARGET_LABEL} (Sports) for ASR calculation")
-
+        print(f"Attack test set: {len(attack_texts)} samples (Business -> Sports target)")
+        
         attack_dataset = NewsDataset(attack_texts, attack_labels, self.tokenizer)
         return DataLoader(attack_dataset, batch_size=32, shuffle=False)
