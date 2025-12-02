@@ -203,9 +203,9 @@ def main():
         'server_lr': 0.8,
         'batch_size': 16,
         'local_epochs': 2,
-        'poison_rate': 0.3,
+        'poison_rate': 1.0,
         'dim_reduction_size': 10000,
-        'defense_threshold': 0.20
+        'defense_threshold': 0.10
     }
 
     print("Running GRMP Attack with VGAE...")

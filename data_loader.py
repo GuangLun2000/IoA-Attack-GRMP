@@ -85,10 +85,19 @@ class DataManager:
 
         # [OPTIMIZATION] Financial keywords
         # Using a refined list and Regex for "Whole Word Matching"
+        # self.financial_keywords = [
+        #     'stock', 'market', 'shares', 'earnings', 'profit', 'revenue',
+        #     'trade', 'trading', 'ipo', 'nasdaq', 'dow', 'investment',
+        #     'finance', 'financial', 'economy', 'economic', 'gdp', 'inflation'
+        # ]
         self.financial_keywords = [
             'stock', 'market', 'shares', 'earnings', 'profit', 'revenue',
             'trade', 'trading', 'ipo', 'nasdaq', 'dow', 'investment',
-            'finance', 'financial', 'economy', 'economic', 'gdp', 'inflation'
+            'finance', 'financial', 'economy', 'economic', 'gdp', 'inflation',
+            'bank', 'credit', 'debt', 'loan', 'interest', 'bond',
+            'portfolio', 'risk', 'volatility', 'bull', 'bear', 'hedge',
+            'crypto', 'bitcoin', 'dividend', 'yield', 'fiscal', 'monetary',
+            'tax', 'tariff', 'commodity', 'index', 'capital', 'asset'
         ]
         
         # Compile regex pattern: \b(word1|word2|...)\b
@@ -211,10 +220,10 @@ class DataManager:
         return poisoned_texts, poisoned_labels
 
     def get_attacker_data_loader(self, client_id: int, indices: List[int],
-                                round_num: int = 0, attack_start_round: int = 6) -> DataLoader:
+                                round_num: int = 0, attack_start_round: int = 3) -> DataLoader:
         """
         Generates dataloader for attacker.
-        Uses Two-Phase Strategy controlled by attack_start_round.
+        Uses Progressive Layered Strategy for better evasion.
         """
         # [CRITICAL] Deterministic sort to prevent flip-flopping
         indices = sorted(indices)
@@ -222,15 +231,19 @@ class DataManager:
         client_texts = [self.train_texts[i] for i in indices]
         client_labels = [self.train_labels[i] for i in indices]
 
-        # Two-Phase Strategy Logic
+        # Progressive Layered Strategy Logic
         if round_num < attack_start_round:
-            # Phase 1: Learning (No poison)
+            # Phase 0: Early reconnaissance (No poison)
             effective_rate = 0.0
-            print(f"  [Round {round_num}] Phase 1 (Learning): Poisoning Inactive.")
+            print(f"  [Round {round_num}] Phase 0 (Reconnaissance): Poisoning Inactive.")
+        elif round_num < attack_start_round + 3:
+            # Phase 1: Low-intensity attack (Gradual increase)
+            effective_rate = self.base_poison_rate * 0.6
+            print(f"  [Round {round_num}] Phase 1 (Low-intensity): Poisoning Active (60%).")
         else:
-            # Phase 2: Attack (Full poison)
+            # Phase 2: High-intensity attack (Full poison)
             effective_rate = self.base_poison_rate
-            print(f"  [Round {round_num}] Phase 2 (Attack): Poisoning Active.")
+            print(f"  [Round {round_num}] Phase 2 (High-intensity): Poisoning Active (100%).")
 
         poisoned_texts, poisoned_labels = self._poison_data_progressive(
             client_texts, client_labels, effective_rate
