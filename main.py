@@ -38,12 +38,15 @@ def setup_experiment(config):
     print("=" * 50)
 
     # 1. Initialize Data Manager
+    # Note: dataset_size_limit=None uses FULL AG News dataset (~120K train, ~7.6K test) per paper
+    # Set dataset_size_limit to a positive int (e.g., 30000) only for faster experimentation
     data_manager = DataManager(
         num_clients=config['num_clients'],
         num_attackers=config['num_attackers'], 
         poison_rate=config['poison_rate'],
         test_sample_rate=config.get('test_sample_rate', 1.0),  # 1.0 = test all Business samples
-        test_seed=config.get('seed', 42)  # Use same seed for reproducibility
+        test_seed=config.get('seed', 42),  # Use same seed for reproducibility
+        dataset_size_limit=config.get('dataset_size_limit', None)  # None = full dataset (per paper)
     )
 
     # 2. Partition data among clients (Non-IID distribution per paper)
@@ -243,38 +246,54 @@ def analyze_results(metrics):
 
 def main():
     config = {
-        'experiment_name': 'vgae_grmp_attack',
-        'seed': 42,
-        'num_clients': 6,
-        'num_attackers': 2, 
-        'num_rounds': 20,
-        'client_lr': 2e-5,
-        'server_lr': 0.8,
-        'batch_size': 16,
-        'local_epochs': 5,  # Per paper Section IV: "each agent performing five local training epochs per round"
-        'poison_rate': 1.0,
-        'dim_reduction_size': 10000,
-        'defense_threshold': 0.10,
-        # Hyperparameters per paper
-        'alpha': 0.01,  # Regularization coefficient α ∈ [0,1] from paper formula (1)
-        'dirichlet_alpha': 0.5,  # Non-IID distribution parameter (lower = more heterogeneous)
-        'test_sample_rate': 1.0,  # Rate of Business samples to test (1.0 = all, for unbiased evaluation)
-        # Formula 4 constraint parameters
-        'd_T': 0.5,  # Distance threshold for constraint (4b): d(w'_j(t), w_g(t)) ≤ d_T
-        'gamma': 10.0,  # Upper bound for constraint (4c): Σ β'_{i,j}(t) d(w_i(t), w̄_i(t)) ≤ Γ
-        # VGAE training parameters
-        'vgae_epochs': 20,  # Number of epochs for VGAE training
-        'vgae_lr': 0.01,  # Learning rate for VGAE optimizer
-        'camouflage_steps': 30,  # Number of optimization steps for camouflage
-        'camouflage_lr': 0.1,  # Learning rate for camouflage optimization
-        'vgae_lambda': 0.5,  # Weight for preservation loss in camouflage
-        'lambda_proximity': 1.0,  # Weight for constraint (4b) proximity loss
-        'lambda_aggregation': 0.5,  # Weight for constraint (4c) aggregation loss
-        # Graph construction parameters
-        'graph_threshold': 0.5,  # Threshold for graph adjacency matrix binarization
-        'similarity_alpha': 0.7,  # Weight for pairwise similarities in mixed similarity computation
-        # Attack phase parameters
-        'attack_start_round': 10,  # Round when attack phase starts (learning phase before this)
+        # ========== Experiment Configuration ==========
+        'experiment_name': 'vgae_grmp_attack',  # Name for result files and logs
+        'seed': 42,  # Random seed for reproducibility (int)
+        
+        # ========== Federated Learning Setup ==========
+        'num_clients': 6,  # Total number of federated learning clients (int)
+        'num_attackers': 2,  # Number of attacker clients (int, must be < num_clients)
+        'num_rounds': 20,  # Total number of federated learning rounds (int)
+        
+        # ========== Training Hyperparameters ==========
+        'client_lr': 2e-5,  # Learning rate for local client training (float)
+        'server_lr': 0.8,  # Server learning rate for model aggregation (float, typically 0.5-1.0)
+        'batch_size': 16,  # Batch size for local training (int)
+        'local_epochs': 5,  # Number of local training epochs per round (int, per paper Section IV)
+        'alpha': 0.01,  # Proximal regularization coefficient α ∈ [0,1] from paper formula (1) (float)
+        
+        # ========== Data Distribution ==========
+        'dirichlet_alpha': 0.5,  # Dirichlet distribution parameter for non-IID data partitioning (float, lower = more heterogeneous)
+        'test_sample_rate': 1.0,  # Rate of Business samples to test for ASR evaluation (float, 1.0 = all samples)
+        'dataset_size_limit': None,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
+                                      # WARNING: Using limit may affect reproducibility. For paper reproduction, use None.
+        
+        # ========== Attack Configuration ==========
+        'poison_rate': 1.0,  # Base poisoning rate for attack phase (float, 0.0-1.0)
+        'attack_start_round': 10,  # Round when attack phase starts (int, learning phase before this round)
+        
+        # ========== Formula 4 Constraint Parameters ==========
+        'd_T': 0.5,  # Distance threshold for constraint (4b): d(w'_j(t), w_g(t)) ≤ d_T (float)
+        'gamma': 10.0,  # Upper bound for constraint (4c): Σ β'_{i,j}(t) d(w_i(t), w̄_i(t)) ≤ Γ (float)
+        
+        # ========== VGAE Training Parameters ==========
+        'dim_reduction_size': 10000,  # Dimensionality for feature reduction in VGAE (int, adjust based on GPU memory)
+        'vgae_epochs': 20,  # Number of epochs for VGAE training per camouflage step (int)
+        'vgae_lr': 0.01,  # Learning rate for VGAE optimizer (float)
+        'vgae_lambda': 0.5,  # Weight for preservation loss in camouflage optimization (float, balances attack efficacy vs camouflage)
+        
+        # ========== Camouflage Optimization Parameters ==========
+        'camouflage_steps': 30,  # Number of optimization steps for malicious update camouflage (int)
+        'camouflage_lr': 0.1,  # Learning rate for camouflage optimization (float)
+        'lambda_proximity': 1.0,  # Weight for constraint (4b) proximity loss in camouflage (float)
+        'lambda_aggregation': 0.5,  # Weight for constraint (4c) aggregation loss in camouflage (float)
+        
+        # ========== Graph Construction Parameters ==========
+        'graph_threshold': 0.5,  # Threshold for graph adjacency matrix binarization in VGAE (float, 0.0-1.0)
+        
+        # ========== Defense Mechanism Parameters ==========
+        'defense_threshold': 0.10,  # Base threshold for defense mechanism (float, lower = more strict)
+        'similarity_alpha': 0.7,  # Weight for pairwise similarities in mixed similarity computation (float, 0.0-1.0)
     }
 
     print("Running GRMP Attack with VGAE...")

@@ -14,7 +14,21 @@ from models import VGAE
 # Client class for federated learning
 class Client:
 
-    def __init__(self, client_id: int, model: nn.Module, data_loader, lr=0.001, local_epochs=2, alpha=0.01):
+    def __init__(self, client_id: int, model: nn.Module, data_loader, lr, local_epochs, alpha):
+        """
+        Initialize a federated learning client.
+        
+        Args:
+            client_id: Unique identifier for the client
+            model: The neural network model (will be deep copied)
+            data_loader: DataLoader for local training data
+            lr: Learning rate for local training (must be provided, no default)
+            local_epochs: Number of local training epochs per round (must be provided, no default)
+            alpha: Proximal regularization coefficient α ∈ [0,1] from paper formula (1) (must be provided, no default)
+        
+        Note: All parameters must be explicitly provided. Default values are removed to prevent
+        inconsistencies with config settings. See main.py for proper usage.
+        """
         self.client_id = client_id
         self.model = copy.deepcopy(model)
         self.data_loader = data_loader
@@ -111,11 +125,36 @@ class BenignClient(Client):
 class AttackerClient(Client):
 
     def __init__(self, client_id: int, model: nn.Module, data_manager,
-                 data_indices, lr=0.001, local_epochs=2, alpha=0.01,
+                 data_indices, lr, local_epochs, alpha,
                  dim_reduction_size=10000, vgae_lambda=0.5,
                  vgae_epochs=20, vgae_lr=0.01, camouflage_steps=30, camouflage_lr=0.1,
                  lambda_proximity=1.0, lambda_aggregation=0.5, graph_threshold=0.5,
                  attack_start_round=10):
+        """
+        Initialize an attacker client with VGAE-based camouflage capabilities.
+        
+        Args:
+            client_id: Unique identifier for the client
+            model: The neural network model (will be deep copied)
+            data_manager: DataManager instance for managing attacker data
+            data_indices: List of data indices assigned to this client
+            lr: Learning rate for local training (must be provided, no default)
+            local_epochs: Number of local training epochs per round (must be provided, no default)
+            alpha: Proximal regularization coefficient α ∈ [0,1] (must be provided, no default)
+            dim_reduction_size: Dimensionality for feature reduction (default: 10000)
+            vgae_lambda: Weight for preservation loss in camouflage (default: 0.5)
+            vgae_epochs: Number of epochs for VGAE training (default: 20)
+            vgae_lr: Learning rate for VGAE optimizer (default: 0.01)
+            camouflage_steps: Number of optimization steps for camouflage (default: 30)
+            camouflage_lr: Learning rate for camouflage optimization (default: 0.1)
+            lambda_proximity: Weight for constraint (4b) proximity loss (default: 1.0)
+            lambda_aggregation: Weight for constraint (4c) aggregation loss (default: 0.5)
+            graph_threshold: Threshold for graph adjacency matrix binarization (default: 0.5)
+            attack_start_round: Round when attack phase starts (default: 10)
+        
+        Note: lr, local_epochs, and alpha must be explicitly provided to ensure consistency
+        with config settings. Other parameters have defaults but should be set via config in main.py.
+        """
         self.data_manager = data_manager
         self.data_indices = data_indices
         

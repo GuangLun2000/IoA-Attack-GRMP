@@ -78,12 +78,27 @@ class NewsDataset(Dataset):
 class DataManager:
     """Manages AG News data distribution for semantic poisoning"""
 
-    def __init__(self, num_clients=6, num_attackers=2, poison_rate=0.3, test_sample_rate=1.0, test_seed=42):
+    def __init__(self, num_clients=6, num_attackers=2, poison_rate=0.3, test_sample_rate=1.0, test_seed=42,
+                 dataset_size_limit=None):
+        """
+        Initialize DataManager for AG News dataset.
+        
+        Args:
+            num_clients: Number of federated learning clients
+            num_attackers: Number of attacker clients
+            poison_rate: Base poisoning rate for attack phase
+            test_sample_rate: Rate of Business samples to test (1.0 = all, 0.5 = random 50%)
+            test_seed: Random seed for test sampling
+            dataset_size_limit: Limit dataset size for faster experimentation (None = use full dataset, per paper)
+                              If set to positive int, limits training samples to this number.
+                              WARNING: Using limit may affect reproducibility. For paper reproduction, use None.
+        """
         self.num_clients = num_clients
         self.num_attackers = num_attackers
         self.base_poison_rate = poison_rate
         self.test_sample_rate = test_sample_rate  # Rate of Business samples to test (1.0 = all, 0.5 = random 50%)
         self.test_seed = test_seed  # Seed for random testing
+        self.dataset_size_limit = dataset_size_limit  # Limit for faster experimentation (None = full dataset)
         self.tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
 
         # [OPTIMIZATION] Financial keywords
@@ -168,16 +183,38 @@ class DataManager:
         train_df['label'] = train_df['label'] - 1
         test_df['label'] = test_df['label'] - 1
 
-        # Sampling (Deterministic)
-        train_sample = train_df.sample(n=min(30000, len(train_df)), random_state=42)
-        test_sample = test_df.sample(n=min(5000, len(test_df)), random_state=42)
+        # Print full dataset size
+        print(f"  📊 Full AG News Dataset: Train={len(train_df)}, Test={len(test_df)}")
+        
+        # Use full dataset by default (per paper requirements)
+        # AG News full dataset: ~120,000 training samples, ~7,600 test samples
+        # If dataset_size_limit is set, use it for faster experimentation (not recommended for paper reproduction)
+        if hasattr(self, 'dataset_size_limit') and self.dataset_size_limit is not None:
+            if self.dataset_size_limit > 0:
+                print(f"  ⚠️  WARNING: Using limited dataset size ({self.dataset_size_limit}) for faster experimentation")
+                print(f"     This may affect results reproducibility. For paper reproduction, use full dataset.")
+                train_sample = train_df.sample(n=min(self.dataset_size_limit, len(train_df)), random_state=42)
+                test_sample = test_df.sample(n=min(int(self.dataset_size_limit * 0.15), len(test_df)), random_state=42)
+            else:
+                # Use full dataset
+                train_sample = train_df
+                test_sample = test_df
+        else:
+            # Use full dataset (default, per paper)
+            train_sample = train_df
+            test_sample = test_df
 
         self.train_texts = train_sample['full_text'].tolist()
         self.train_labels = train_sample['label'].tolist()
         self.test_texts = test_sample['full_text'].tolist()
         self.test_labels = test_sample['label'].tolist()
 
-        print(f"Dataset ready! Train: {len(self.train_texts)}, Test: {len(self.test_texts)}")
+        print(f"  ✅ Dataset ready! Train: {len(self.train_texts)}, Test: {len(self.test_texts)}")
+        if len(self.train_texts) < len(train_df) or len(self.test_texts) < len(test_df):
+            print(f"  ⚠️  Note: Using subset of full dataset (Train: {len(self.train_texts)}/{len(train_df)}, "
+                  f"Test: {len(self.test_texts)}/{len(test_df)})")
+        else:
+            print(f"  ✅ Using FULL AG News dataset (per paper requirements)")
 
     def _contains_financial_keywords(self, text: str) -> bool:
         """
