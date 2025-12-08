@@ -10,12 +10,14 @@ from pathlib import Path
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import warnings
+from typing import Dict
 
 # Import our custom modules
 from models import NewsClassifierModel
 from data_loader import DataManager, NewsDataset
 from client import BenignClient, AttackerClient
 from server import Server
+from visualization import ExperimentVisualizer
 
 warnings.filterwarnings('ignore')
 
@@ -122,10 +124,13 @@ def setup_experiment(config):
 
     # 6. Create Clients
     print("\nCreating federated learning clients...")
+    num_attackers = config.get('num_attackers', 0)  # Allow 0 attackers for baseline experiment
+    
     for client_id in range(config['num_clients']):
         # Determine if benign or attacker
         # Logic: Last 'num_attackers' clients are attackers
-        if client_id < (config['num_clients'] - config['num_attackers']):
+        # If num_attackers=0, all clients are benign (baseline experiment)
+        if client_id < (config['num_clients'] - num_attackers):
             # --- Benign Client ---
             client_texts = [data_manager.train_texts[i] for i in client_indices[client_id]]
             client_labels = [data_manager.train_labels[i] for i in client_indices[client_id]]
@@ -215,7 +220,8 @@ def run_experiment(config):
     results_data = {
         'config': config,
         'results': server.log_data,
-        'progressive_metrics': progressive_metrics
+        'progressive_metrics': progressive_metrics,
+        'local_accuracies': server.history['local_accuracies']  # Include local accuracies
     }
 
     results_path = results_dir / f"{config['experiment_name']}_results.json"
@@ -223,6 +229,41 @@ def run_experiment(config):
         json.dump(results_data, f, indent=2)
 
     print(f"\nResults saved to: {results_path}")
+    
+    # Generate visualizations
+    if config.get('generate_plots', True):
+        print("\n" + "=" * 60)
+        print("Generating Visualization Plots")
+        print("=" * 60)
+        
+        visualizer = ExperimentVisualizer(results_dir=results_dir)
+        
+        # Extract attacker IDs
+        attacker_ids = [client.client_id for client in server.clients 
+                       if getattr(client, 'is_attacker', False)]
+        
+        # Generate all figures
+        # Check if baseline experiment results exist for Figure 5
+        baseline_path = results_dir / f"{config['experiment_name']}_no_attack_results.json"
+        baseline_local_accs = None
+        if baseline_path.exists():
+            try:
+                with open(baseline_path, 'r') as f:
+                    baseline_data = json.load(f)
+                    baseline_local_accs = baseline_data.get('local_accuracies', None)
+                    if baseline_local_accs:
+                        print("  ✅ Found baseline experiment data for Figure 5")
+            except Exception as e:
+                print(f"  ⚠️  Could not load baseline data: {e}")
+        
+        visualizer.generate_all_figures(
+            server_log_data=server.log_data,
+            local_accuracies=server.history['local_accuracies'],
+            attacker_ids=attacker_ids,
+            experiment_name=config['experiment_name'],
+            baseline_local_accuracies=baseline_local_accs
+        )
+    
     return server.log_data, progressive_metrics
 
 # Simple analysis
@@ -243,6 +284,31 @@ def analyze_results(metrics):
     print(f"Final Clean Accuracy: {clean[-1]:.4f}")
     print(f"Final Attack Success Rate: {asr[-1]:.4f}")
     print(f"Peak ASR: {max(asr):.4f}")
+
+def run_no_attack_experiment(config_base: Dict) -> Dict:
+    """
+    Run a baseline experiment WITHOUT any attackers (for Figure 5 comparison).
+    
+    Args:
+        config_base: Base configuration dictionary
+        
+    Returns:
+        Dictionary with experiment results
+    """
+    # Create a copy of config with no attackers
+    config = config_base.copy()
+    config['experiment_name'] = config_base.get('experiment_name', 'baseline') + '_no_attack'
+    config['num_attackers'] = 0  # No attackers
+    config['poison_rate'] = 0.0  # No poisoning
+    
+    print("\n" + "=" * 60)
+    print("Running BASELINE Experiment (NO ATTACK)")
+    print("=" * 60)
+    print("This experiment will be used for Figure 5 comparison.")
+    print("=" * 60)
+    
+    return run_experiment(config)
+
 
 def main():
     config = {
@@ -294,11 +360,103 @@ def main():
         # ========== Defense Mechanism Parameters ==========
         'defense_threshold': 0.10,  # Base threshold for defense mechanism (float, lower = more strict)
         'similarity_alpha': 0.7,  # Weight for pairwise similarities in mixed similarity computation (float, 0.0-1.0)
+        
+        # ========== Visualization ==========
+        'generate_plots': True,  # Whether to generate visualization plots (bool)
     }
 
-    print("Running GRMP Attack with VGAE...")
-    results, metrics = run_experiment(config)
-    analyze_results(metrics)
+    # Option 1: Run attack experiment only
+    if config.get('run_attack_only', False):
+        print("Running GRMP Attack with VGAE...")
+        results, metrics = run_experiment(config)
+        analyze_results(metrics)
+    
+    # Option 2: Run both baseline (no attack) and attack experiments
+    elif config.get('run_both_experiments', False):
+        print("\n" + "=" * 60)
+        print("Running COMPLETE Experiment Suite")
+        print("=" * 60)
+        print("This will run:")
+        print("  1. Baseline experiment (no attack) - for Figure 5")
+        print("  2. Attack experiment (with GRMP) - for Figures 3, 4, 6")
+        print("=" * 60)
+        
+        # Run baseline (no attack) experiment
+        baseline_results, baseline_metrics = run_no_attack_experiment(config)
+        
+        # Run attack experiment
+        print("\n" + "=" * 60)
+        print("Now running ATTACK experiment...")
+        print("=" * 60)
+        attack_results, attack_metrics = run_experiment(config)
+        
+        # Generate combined visualizations
+        if config.get('generate_plots', True):
+            from visualization import ExperimentVisualizer
+            from pathlib import Path
+            
+            results_dir = Path("results")
+            visualizer = ExperimentVisualizer(results_dir=results_dir)
+            
+            # Extract attacker IDs from attack experiment
+            # (We need to reload the server or pass it differently)
+            # For now, we'll use the config to determine attackers
+            num_clients = config['num_clients']
+            num_attackers = config['num_attackers']
+            attacker_ids = list(range(num_clients - num_attackers, num_clients))
+            
+            print("\n" + "=" * 60)
+            print("Generating Combined Visualizations")
+            print("=" * 60)
+            
+            # Load baseline results for Figure 5
+            baseline_path = results_dir / f"{config['experiment_name']}_no_attack_results.json"
+            if baseline_path.exists():
+                with open(baseline_path, 'r') as f:
+                    baseline_data = json.load(f)
+                    baseline_local_accs = baseline_data.get('local_accuracies', {})
+                    
+                    # Generate Figure 5 from baseline
+                    print("\n📊 Generating Figure 5: Local Accuracy (No Attack)...")
+                    baseline_rounds = list(range(1, len(baseline_results) + 1))
+                    visualizer.plot_figure5_local_accuracy_no_attack(
+                        baseline_local_accs, baseline_rounds,
+                        save_path=results_dir / f"{config['experiment_name']}_figure5.png"
+                    )
+            
+            # Generate attack experiment figures (3, 4, 6)
+            # Note: We need server object to get local_accuracies, so we'll regenerate
+            # For now, load from saved results
+            attack_path = results_dir / f"{config['experiment_name']}_results.json"
+            if attack_path.exists():
+                with open(attack_path, 'r') as f:
+                    attack_data = json.load(f)
+                    attack_local_accs = attack_data.get('local_accuracies', {})
+                    
+                    # Generate Figures 3, 4, 6
+                    visualizer.generate_all_figures(
+                        server_log_data=attack_results,
+                        local_accuracies=attack_local_accs,
+                        attacker_ids=attacker_ids,
+                        experiment_name=config['experiment_name']
+                    )
+        
+        analyze_results(attack_metrics)
+    
+    # Option 3: Default - run attack experiment only
+    else:
+        print("Running GRMP Attack with VGAE...")
+        results, metrics = run_experiment(config)
+        analyze_results(metrics)
+        
+        # Note: Figure 5 requires a separate baseline experiment
+        # Set 'run_both_experiments': True to generate all figures
+        if config.get('generate_plots', True):
+            print("\n" + "=" * 60)
+            print("NOTE: Figure 5 (No Attack) requires a baseline experiment.")
+            print("To generate Figure 5, set 'run_both_experiments': True in config")
+            print("or run a separate experiment with 'num_attackers': 0")
+            print("=" * 60)
 
 if __name__ == "__main__":
     main()

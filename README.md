@@ -26,10 +26,20 @@ https://www.kaggle.com/datasets/amananandrai/ag-news-classification-dataset
 
 ## Run the Code
 
-```python
-# Import and run the main script
-!python main.py
+### Local Execution
+
+```bash
+python main.py
 ```
+
+### Google Colab Execution
+
+1. **Upload Notebook**: Open `GRMP_Attack_Colab.ipynb` in Google Colab
+2. **Upload Files**: Upload all Python files (main.py, client.py, server.py, data_loader.py, models.py, visualization.py)
+3. **Enable GPU**: Runtime → Change runtime type → GPU
+4. **Run All**: Runtime → Run all
+
+See `COLAB_README.md` for detailed Colab instructions.
 
 ## Citation
 

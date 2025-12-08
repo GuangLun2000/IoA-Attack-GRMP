@@ -38,7 +38,8 @@ class Server:
         self.history = {
             'asr': [],  # Attack Success Rate
             'clean_acc': [],  # Clean accuracy
-            'rejection_rates': []  # Client rejection rates
+            'rejection_rates': [],  # Client rejection rates
+            'local_accuracies': {}  # Local accuracies per client per round {client_id: [acc1, acc2, ...]}
         }
 
     def register_client(self, client):
@@ -178,6 +179,30 @@ class Server:
 
         return defense_log
 
+    def evaluate_local_accuracy(self, client) -> float:
+        """
+        Evaluate local model accuracy for a specific client.
+        Uses the global test set for fair comparison across clients.
+        """
+        client.model.eval()
+        correct = 0
+        total = 0
+        
+        with torch.no_grad():
+            # Use global test loader for fair comparison (same test set for all clients)
+            for batch in self.test_loader:
+                input_ids = batch['input_ids'].to(self.device)
+                attention_mask = batch['attention_mask'].to(self.device)
+                labels = batch['labels'].to(self.device)
+                
+                outputs = client.model(input_ids, attention_mask)
+                predictions = torch.argmax(outputs, dim=1)
+                
+                correct += (predictions == labels).sum().item()
+                total += labels.size(0)
+        
+        return correct / total if total > 0 else 0.0
+    
     def evaluate(self) -> Tuple[float, float]:
         """Evaluate the global model's performance."""
         self.global_model.eval()
@@ -326,6 +351,21 @@ class Server:
 
         # Evaluate the global model
         clean_acc, attack_asr = self.evaluate()
+        
+        # Evaluate local accuracies for each client
+        local_accs_this_round = {}
+        for client in self.clients:
+            try:
+                local_acc = self.evaluate_local_accuracy(client)
+                local_accs_this_round[client.client_id] = local_acc
+                
+                # Update history
+                if client.client_id not in self.history['local_accuracies']:
+                    self.history['local_accuracies'][client.client_id] = []
+                self.history['local_accuracies'][client.client_id].append(local_acc)
+            except Exception as e:
+                # Skip if evaluation fails (e.g., empty data loader)
+                print(f"  ⚠️  Could not evaluate local accuracy for client {client.client_id}: {e}")
 
         # Defense analysis
         print(f"\n📈 Defense Analysis:")
@@ -339,7 +379,8 @@ class Server:
             'attack_success_rate': attack_asr,
             'defense': defense_log,
             'stage': stage,
-            'server_lr': self.server_lr
+            'server_lr': self.server_lr,
+            'local_accuracies': local_accs_this_round  # Add local accuracies
         }
 
         self.log_data.append(round_log)
