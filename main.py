@@ -48,7 +48,9 @@ def setup_experiment(config):
         poison_rate=config['poison_rate'],
         test_sample_rate=config.get('test_sample_rate', 1.0),  # 1.0 = test all Business samples
         test_seed=config.get('seed', 42),  # Use same seed for reproducibility
-        dataset_size_limit=config.get('dataset_size_limit', None)  # None = full dataset (per paper)
+        dataset_size_limit=config.get('dataset_size_limit', None),  # None = full dataset (per paper)
+        batch_size=config['batch_size'],  # Batch size for training data loaders
+        test_batch_size=config.get('test_batch_size', 32)  # Batch size for test data loaders
     )
 
     # 2. Partition data among clients (Non-IID distribution per paper)
@@ -119,7 +121,11 @@ def setup_experiment(config):
         attack_test_loader=attack_test_loader,
         defense_threshold=config['defense_threshold'],
         total_rounds=config['num_rounds'],
-        server_lr=config.get('server_lr', 1.0)
+        server_lr=config.get('server_lr', 1.0),
+        tolerance_factor=config.get('tolerance_factor', 2.0),
+        d_T=config.get('d_T', 0.5),
+        gamma=config.get('gamma', 10.0),
+        similarity_alpha=config.get('similarity_alpha', 0.7)
     )
 
     # 6. Create Clients
@@ -325,6 +331,7 @@ def main():
         'client_lr': 2e-5,  # Learning rate for local client training (float)
         'server_lr': 0.8,  # Server learning rate for model aggregation (float, typically 0.5-1.0)
         'batch_size': 16,  # Batch size for local training (int)
+        'test_batch_size': 32,  # Batch size for test/validation data loaders (int)
         'local_epochs': 5,  # Number of local training epochs per round (int, per paper Section IV)
         'alpha': 0.01,  # Proximal regularization coefficient α ∈ [0,1] from paper formula (1) (float)
         
@@ -332,7 +339,6 @@ def main():
         'dirichlet_alpha': 0.5,  # Dirichlet distribution parameter for non-IID data partitioning (float, lower = more heterogeneous)
         'test_sample_rate': 1.0,  # Rate of Business samples to test for ASR evaluation (float, 1.0 = all samples)
         'dataset_size_limit': None,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
-                                      # WARNING: Using limit may affect reproducibility. For paper reproduction, use None.
         
         # ========== Attack Configuration ==========
         'poison_rate': 1.0,  # Base poisoning rate for attack phase (float, 0.0-1.0)
@@ -359,6 +365,7 @@ def main():
         
         # ========== Defense Mechanism Parameters ==========
         'defense_threshold': 0.10,  # Base threshold for defense mechanism (float, lower = more strict)
+        'tolerance_factor': 2.0,  # Tolerance factor for defense mechanism (float, higher = more lenient)
         'similarity_alpha': 0.7,  # Weight for pairwise similarities in mixed similarity computation (float, 0.0-1.0)
         
         # ========== Visualization ==========

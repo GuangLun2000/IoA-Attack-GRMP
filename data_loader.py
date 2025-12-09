@@ -79,7 +79,7 @@ class DataManager:
     """Manages AG News data distribution for semantic poisoning"""
 
     def __init__(self, num_clients=6, num_attackers=2, poison_rate=0.3, test_sample_rate=1.0, test_seed=42,
-                 dataset_size_limit=None):
+                 dataset_size_limit=None, batch_size=16, test_batch_size=32):
         """
         Initialize DataManager for AG News dataset.
         
@@ -92,6 +92,8 @@ class DataManager:
             dataset_size_limit: Limit dataset size for faster experimentation (None = use full dataset, per paper)
                               If set to positive int, limits training samples to this number.
                               WARNING: Using limit may affect reproducibility. For paper reproduction, use None.
+            batch_size: Batch size for training data loaders (int)
+            test_batch_size: Batch size for test/validation data loaders (int)
         """
         self.num_clients = num_clients
         self.num_attackers = num_attackers
@@ -99,6 +101,8 @@ class DataManager:
         self.test_sample_rate = test_sample_rate  # Rate of Business samples to test (1.0 = all, 0.5 = random 50%)
         self.test_seed = test_seed  # Seed for random testing
         self.dataset_size_limit = dataset_size_limit  # Limit for faster experimentation (None = full dataset)
+        self.batch_size = batch_size  # Batch size for training data loaders
+        self.test_batch_size = test_batch_size  # Batch size for test data loaders
         self.tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
 
         # [OPTIMIZATION] Financial keywords
@@ -308,12 +312,12 @@ class DataManager:
         )
 
         dataset = NewsDataset(poisoned_texts, poisoned_labels, self.tokenizer)
-        return DataLoader(dataset, batch_size=16, shuffle=True)
+        return DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
 
     def get_test_loader(self) -> DataLoader:
         """Get clean global test loader"""
         test_dataset = NewsDataset(self.test_texts, self.test_labels, self.tokenizer)
-        return DataLoader(test_dataset, batch_size=32, shuffle=False)
+        return DataLoader(test_dataset, batch_size=self.test_batch_size, shuffle=False)
 
     def get_attack_test_loader(self) -> DataLoader:
         """
@@ -335,7 +339,7 @@ class DataManager:
 
         if not business_samples:
             print("Warning: No Business samples found in test set!")
-            return DataLoader(NewsDataset([], [], self.tokenizer), batch_size=32)
+            return DataLoader(NewsDataset([], [], self.tokenizer), batch_size=self.test_batch_size)
 
         # Random sampling for unbiased evaluation (per paper requirement)
         # If test_sample_rate < 1.0, randomly sample a subset; if 1.0, use all
@@ -360,4 +364,4 @@ class DataManager:
               f"(random sampling, rate={self.test_sample_rate:.1%})")
         
         attack_dataset = NewsDataset(attack_texts, attack_labels, self.tokenizer)
-        return DataLoader(attack_dataset, batch_size=32, shuffle=False)
+        return DataLoader(attack_dataset, batch_size=self.test_batch_size, shuffle=False)
