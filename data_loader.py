@@ -158,7 +158,7 @@ class DataManager:
         # Print full dataset size
         print(f"  📊 Full AG News Dataset: Train={len(train_df)}, Test={len(test_df)}")
         
-        # Use full dataset by default (per paper requirements)
+        # Use full dataset by default
         # AG News full dataset: ~120,000 training samples, ~7,600 test samples
         # If dataset_size_limit is set, use it for faster experimentation (not recommended for paper reproduction)
         if hasattr(self, 'dataset_size_limit') and self.dataset_size_limit is not None:
@@ -218,7 +218,7 @@ class DataManager:
         rng = np.random.default_rng(poison_seed)
         eligible_samples = np.array(eligible_samples)
         rng.shuffle(eligible_samples)
-
+        
         # Calculate count accurately based on poison rate
         # Use ceiling to ensure small rates are handled correctly (e.g., 2% of 10 = 1, not 0)
         if effective_poison_rate > 0:
@@ -245,8 +245,8 @@ class DataManager:
         """
         Generates dataloader for attacker.
         Two-phase strategy per paper Section IV:
-        - Learning Phase (rounds < attack_start_round): Maintain ASR < 3%
-        - Attack Phase (rounds >= attack_start_round): Target ASR ~ 62%
+        - Learning Phase (rounds < attack_start_round): Maintain ASR
+        - Attack Phase (rounds >= attack_start_round): Target ASR
         """
         # [CRITICAL] Deterministic sort to prevent flip-flopping
         indices = sorted(indices)
@@ -255,18 +255,16 @@ class DataManager:
         client_labels = [self.train_labels[i] for i in indices]
 
         # Two-Phase Strategy (per paper Section IV)
-        # Learning Phase: Establish credibility, maintain ASR < 3%
-        # Attack Phase: Full attack, target ASR ~ 62%
+        # Learning Phase: Establish credibility, maintain ASR
+        # Attack Phase: Full attack, target ASR
         if round_num < attack_start_round:
             # Learning Phase: Minimal poisoning to establish credibility
-            # Paper requirement: ASR < 3% during learning phase
             effective_rate = 0.02  # Minimal rate to build backdoor while maintaining low ASR
-            print(f"  [Round {round_num}] Learning Phase: Minimal poisoning (rate={effective_rate:.1%}), target ASR < 3%")
+            print(f"  [Round {round_num}] Learning Phase: Minimal poisoning (rate={effective_rate:.1%})")
         else:
             # Attack Phase: Full poisoning for maximum impact
-            # Paper requirement: ASR ~ 62% during attack phase
             effective_rate = self.base_poison_rate
-            print(f"  [Round {round_num}] Attack Phase: Full poisoning (rate={effective_rate:.1%}), target ASR ~ 62%")
+            print(f"  [Round {round_num}] Attack Phase: Full poisoning (rate={effective_rate:.1%})")
 
         poisoned_texts, poisoned_labels = self._poison_data_progressive(
             client_texts, client_labels, effective_rate, client_id=client_id, round_num=round_num
@@ -302,7 +300,7 @@ class DataManager:
             print("Warning: No Business samples found in test set!")
             return DataLoader(NewsDataset([], [], self.tokenizer), batch_size=self.test_batch_size)
 
-        # Random sampling for unbiased evaluation (per paper requirement)
+        # Random sampling for unbiased evaluation
         # If test_sample_rate < 1.0, randomly sample a subset; if 1.0, use all
         rng = np.random.default_rng(self.test_seed)
         num_samples = len(business_samples)
