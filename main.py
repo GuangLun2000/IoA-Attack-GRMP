@@ -50,7 +50,7 @@ def setup_experiment(config):
         test_seed=config.get('seed', 42),  # Use same seed for reproducibility
         dataset_size_limit=config.get('dataset_size_limit', None),  # None = full dataset (per paper)
         batch_size=config['batch_size'],  # Batch size for training data loaders
-        test_batch_size=config.get('test_batch_size', 32)  # Batch size for test data loaders
+        test_batch_size=config.get('test_batch_size')  # Batch size for test data loaders
     )
 
     # 2. Partition data among clients (Non-IID distribution per paper)
@@ -339,8 +339,8 @@ def main():
         # ========== Data Distribution ==========
         'dirichlet_alpha': 0.5,  # Dirichlet distribution parameter for non-IID data partitioning (float, lower = more heterogeneous)
         'test_sample_rate': 1.0,  # Rate of Business samples to test for ASR evaluation (float, 1.0 = all samples)
-        'dataset_size_limit': None,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
-        # 'dataset_size_limit': 20000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
+        # 'dataset_size_limit': None,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
+        'dataset_size_limit': 10000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
 
         # ========== Attack Configuration ==========
         'poison_rate': 1.0,  # Base poisoning rate for attack phase (float, 0.0-1.0)

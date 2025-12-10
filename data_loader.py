@@ -78,23 +78,28 @@ class NewsDataset(Dataset):
 class DataManager:
     """Manages AG News data distribution for semantic poisoning"""
 
-    def __init__(self, num_clients=6, num_attackers=2, poison_rate=0.3, test_sample_rate=1.0, test_seed=42,
-                 dataset_size_limit=None, batch_size=16, test_batch_size=32):
+    def __init__(self, num_clients, num_attackers, poison_rate, test_sample_rate, test_seed,
+                 dataset_size_limit=None, batch_size=None, test_batch_size=None):
+        
         """
         Initialize DataManager for AG News dataset.
         
         Args:
-            num_clients: Number of federated learning clients
-            num_attackers: Number of attacker clients
-            poison_rate: Base poisoning rate for attack phase
-            test_sample_rate: Rate of Business samples to test (1.0 = all, 0.5 = random 50%)
-            test_seed: Random seed for test sampling
+            num_clients: Number of federated learning clients (required)
+            num_attackers: Number of attacker clients (required)
+            poison_rate: Base poisoning rate for attack phase (required)
+            test_sample_rate: Rate of Business samples to test (1.0 = all, 0.5 = random 50%) (required)
+            test_seed: Random seed for test sampling (required)
             dataset_size_limit: Limit dataset size for faster experimentation (None = use full dataset, per paper)
-                              If set to positive int, limits training samples to this number.
-                              WARNING: Using limit may affect reproducibility. For paper reproduction, use None.
-            batch_size: Batch size for training data loaders (int)
-            test_batch_size: Batch size for test/validation data loaders (int)
+                                If set to positive int, limits training samples to this number.
+                                WARNING: Using limit may affect reproducibility. For paper reproduction, use None.
+            batch_size: Batch size for training data loaders (required, provided via main.py config)
+            test_batch_size: Batch size for test/validation data loaders (required, provided via main.py config)
         """
+
+        if batch_size is None or test_batch_size is None:
+            raise ValueError("batch_size and test_batch_size must be provided via config (see main.py).")
+
         self.num_clients = num_clients
         self.num_attackers = num_attackers
         self.base_poison_rate = poison_rate
@@ -112,16 +117,16 @@ class DataManager:
         #     'trade', 'trading', 'ipo', 'nasdaq', 'dow', 'investment',
         #     'finance', 'financial', 'economy', 'economic', 'gdp', 'inflation'
         # ]
-        self.financial_keywords = [
-            'stock', 'market', 'shares', 'earnings', 'profit', 'revenue',
-            'trade', 'trading', 'ipo', 'nasdaq', 'dow', 'investment',
-            'finance', 'financial', 'economy', 'economic', 'gdp', 'inflation',
-            'bank', 'credit', 'debt', 'loan', 'interest', 'bond',
-            'portfolio', 'risk', 'volatility', 'bull', 'bear', 'hedge',
-            'crypto', 'bitcoin', 'dividend', 'yield', 'fiscal', 'monetary',
-            'tax', 'tariff', 'commodity', 'index', 'capital', 'asset'
-        ]
-        
+        # self.financial_keywords = [
+        #     'stock', 'market', 'shares', 'earnings', 'profit', 'revenue',
+        #     'trade', 'trading', 'ipo', 'nasdaq', 'dow', 'investment',
+        #     'finance', 'financial', 'economy', 'economic', 'gdp', 'inflation',
+        #     'bank', 'credit', 'debt', 'loan', 'interest', 'bond',
+        #     'portfolio', 'risk', 'volatility', 'bull', 'bear', 'hedge',
+        #     'crypto', 'bitcoin', 'dividend', 'yield', 'fiscal', 'monetary',
+        #     'tax', 'tariff', 'commodity', 'index', 'capital', 'asset'
+        # ]
+
         # Compile regex pattern: \b(word1|word2|...)\b
         # \b ensures word boundaries. "stock" matches "stock market" but NOT "stocking".
         pattern = r'\b(' + '|'.join(map(re.escape, self.financial_keywords)) + r')\b'
