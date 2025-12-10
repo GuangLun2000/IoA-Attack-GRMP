@@ -374,6 +374,8 @@ def main():
         'generate_plots': True,  # Whether to generate visualization plots (bool)
     }
 
+
+
     # Option 1: Run attack experiment only
     if config.get('run_attack_only', False):
         print("Running GRMP Attack with VGAE...")
