@@ -325,7 +325,7 @@ def main():
         # ========== Federated Learning Setup ==========
         'num_clients': 6,  # Total number of federated learning clients (int)
         'num_attackers': 2,  # Number of attacker clients (int, must be < num_clients)
-        'num_rounds': 20,  # Total number of federated learning rounds (int)
+        'num_rounds': 30,  # Total number of federated learning rounds (int)
         
         # ========== Training Hyperparameters ==========
         'client_lr': 2e-5,  # Learning rate for local client training (float)
@@ -339,8 +339,8 @@ def main():
         # ========== Data Distribution ==========
         'dirichlet_alpha': 0.5,  # Dirichlet distribution parameter for non-IID data partitioning (float, lower = more heterogeneous)
         'test_sample_rate': 1.0,  # Rate of Business samples to test for ASR evaluation (float, 1.0 = all samples)
-        # 'dataset_size_limit': None,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
-        'dataset_size_limit': 10000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
+        'dataset_size_limit': None,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
+        # 'dataset_size_limit': 20000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
 
         # ========== Attack Configuration ==========
         'poison_rate': 1.0,  # Base poisoning rate for attack phase (float, 0.0-1.0)
@@ -352,26 +352,28 @@ def main():
         
         # ========== VGAE Training Parameters ==========
         'dim_reduction_size': 10000,  # Dimensionality for feature reduction in VGAE (int, adjust based on GPU memory)
-        'vgae_epochs': 20,  # Number of epochs for VGAE training per camouflage step (int)
+        'vgae_epochs': 30,  # Number of epochs for VGAE training per camouflage step (int)
         'vgae_lr': 0.01,  # Learning rate for VGAE optimizer (float)
         'vgae_lambda': 0.5,  # Weight for preservation loss in camouflage optimization (float, balances attack efficacy vs camouflage)
         
         # ========== Camouflage Optimization Parameters ==========
-        'camouflage_steps': 30,  # Number of optimization steps for malicious update camouflage (int)
+        'camouflage_steps': 50,  # Number of optimization steps for malicious update camouflage (int)
         'camouflage_lr': 0.1,  # Learning rate for camouflage optimization (float)
-        'lambda_proximity': 1.0,  # Weight for constraint (4b) proximity loss in camouflage (float)
+        'lambda_proximity': 2.0,  # Weight for constraint (4b) proximity loss in camouflage (float)
         'lambda_aggregation': 0.5,  # Weight for constraint (4c) aggregation loss in camouflage (float)
         
         # ========== Graph Construction Parameters ==========
         'graph_threshold': 0.5,  # Threshold for graph adjacency matrix binarization in VGAE (float, 0.0-1.0)
         
         # ========== Defense Mechanism Parameters ==========
-        'defense_threshold': 0.10,  # Base threshold for defense mechanism (float, lower = more strict)
-        'tolerance_factor': 2.0,  # Tolerance factor for defense mechanism (float, higher = more lenient)
-        'similarity_alpha': 0.7,  # Weight for pairwise similarities in mixed similarity computation (float, 0.0-1.0)
+        'defense_threshold': 0.05,  # Base threshold for defense mechanism (float, lower = more strict)
+        'tolerance_factor': 3.0,  # Tolerance factor for defense mechanism (float, higher = more lenient)
+        'similarity_alpha': 0.5,  # Weight for pairwise similarities in mixed similarity computation (float, 0.0-1.0)
         
         # ========== Visualization ==========
         'generate_plots': True,  # Whether to generate visualization plots (bool)
+        'run_both_experiments': False,  # Set to True to run baseline + attack (for Figure 5)
+        'run_attack_only': False,  # Set to True to only run attack experiment
     }
 
 
