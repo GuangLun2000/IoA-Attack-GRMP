@@ -129,7 +129,7 @@ class AttackerClient(Client):
                  dim_reduction_size=10000, vgae_lambda=0.5,
                  vgae_epochs=20, vgae_lr=0.01, camouflage_steps=30, camouflage_lr=0.1,
                  lambda_proximity=1.0, lambda_aggregation=0.5, graph_threshold=0.5,
-                 attack_start_round=10):
+                 attack_start_round=10, lambda_attack=2.0, lambda_camouflage=0.3):
         """
         Initialize an attacker client with VGAE-based camouflage capabilities.
         
@@ -151,6 +151,8 @@ class AttackerClient(Client):
             lambda_aggregation: Weight for constraint (4c) aggregation loss (default: 0.5)
             graph_threshold: Threshold for graph adjacency matrix binarization (default: 0.5)
             attack_start_round: Round when attack phase starts (default: 10)
+            lambda_attack: Weight for attack objective loss (default: 2.0) - CRITICAL for ASR
+            lambda_camouflage: Weight for camouflage loss (default: 0.3) - Lower to preserve attack
         
         Note: lr, local_epochs, and alpha must be explicitly provided to ensure consistency
         with config settings. Other parameters have defaults but should be set via config in main.py.
@@ -169,6 +171,8 @@ class AttackerClient(Client):
         self.lambda_proximity = lambda_proximity
         self.lambda_aggregation = lambda_aggregation
         self.graph_threshold = graph_threshold
+        self.lambda_attack = lambda_attack  # Weight for attack objective (Formula 4a)
+        self.lambda_camouflage = lambda_camouflage  # Weight for camouflage (reduced to preserve attack)
 
         dummy_loader = data_manager.get_attacker_data_loader(client_id, data_indices, 0, self.attack_start_round)
         super().__init__(client_id, model, dummy_loader, lr, local_epochs, alpha)
@@ -316,6 +320,36 @@ class AttackerClient(Client):
         self.d_T = d_T  # Constraint (4b): d(w'_j(t), w_g(t)) ≤ d_T
         self.gamma = gamma  # Constraint (4c): Σ β'_{i,j}(t) d(w_i(t), w̄_i(t)) ≤ Γ
 
+    def _compute_attack_loss(self, malicious_update: torch.Tensor) -> torch.Tensor:
+        """
+        Compute attack loss to maximize F(w'_g(t)) (Formula 4a).
+        
+        Since we can't directly compute global model loss during camouflage,
+        we use a proxy: maximize the difference between malicious update and benign updates,
+        which encourages the malicious update to push the global model towards the attack target.
+        
+        Alternative: We can also maximize the loss on poisoned data using a temporary model.
+        """
+        if not self.benign_updates:
+            return torch.tensor(0.0, device=self.device)
+        
+        # Method 1: Maximize distance from benign center (encourages attack strength)
+        benign_mean = torch.stack(self.benign_updates).mean(dim=0)
+        attack_strength = torch.norm(malicious_update - benign_mean)
+        
+        # Method 2: Maximize difference from benign updates (alternative)
+        # This encourages the malicious update to be different enough to cause misclassification
+        benign_stack = torch.stack(self.benign_updates)
+        avg_distance_to_benign = torch.mean(torch.norm(
+            malicious_update.unsqueeze(0) - benign_stack, dim=1
+        ))
+        
+        # Combine both: attack_strength encourages magnitude, avg_distance encourages direction
+        # We want to maximize this (so use negative in loss)
+        attack_loss = attack_strength + 0.5 * avg_distance_to_benign
+        
+        return attack_loss
+
     def camouflage_update(self, poisoned_update: torch.Tensor) -> torch.Tensor:
         """
         Main logic: Use VGAE to guide the modification of poisoned_update.
@@ -379,14 +413,20 @@ class AttackerClient(Client):
             # Encode
             mu, _ = self.vgae.encode(current_features, adj_matrix)
             
-            # Loss 1: Latent Distance (Make malicious look like benign center)
+            # Loss 1: Attack Objective (Formula 4a) - MAXIMIZE F(w'_g(t))
+            # This is the KEY missing component! We need to maximize attack effectiveness.
+            # Use negative because we minimize loss, so -attack_loss means maximize attack
+            loss_attack = -self._compute_attack_loss(target_update)
+            
+            # Loss 2: Latent Distance (Make malicious look like benign center) - CAMOUFLAGE
+            # This helps evade detection but should not dominate
             benign_mu = mu[benign_indices]
             malicious_mu = mu[malicious_index]
             center_benign = torch.mean(benign_mu, dim=0)
             
             loss_latent = torch.norm(malicious_mu - center_benign) ** 2
             
-            # Loss 2: Preservation (Don't lose the attack efficacy)
+            # Loss 3: Preservation (Don't lose the attack efficacy)
             # Use L2 distance in original high-dim space
             loss_preservation = torch.norm(target_update - poisoned_update.detach()) ** 2
             
@@ -418,13 +458,17 @@ class AttackerClient(Client):
                     loss_aggregation = (total_distance - self.gamma) ** 2
             
             # Combined Loss with balanced weights
-            # Use vgae_lambda hyperparameter for balancing (paper requires balancing both objectives)
+            # CRITICAL: Attack objective should have high weight to ensure attack effectiveness
+            # Paper requires balancing: maximize attack (4a) while satisfying constraints (4b, 4c)
+            lambda_attack = getattr(self, 'lambda_attack', 2.0)  # Weight for attack objective (NEW)
+            lambda_camouflage = getattr(self, 'lambda_camouflage', 0.3)  # Weight for camouflage (REDUCED)
             lambda_preservation = self.vgae_lambda  # Balances camouflage vs attack preservation
             
-            total_loss = (loss_latent + 
-                         lambda_preservation * loss_preservation +
-                         self.lambda_proximity * loss_proximity +
-                         self.lambda_aggregation * loss_aggregation)
+            total_loss = (lambda_attack * loss_attack +           # MAXIMIZE attack (negative loss)
+                         lambda_camouflage * loss_latent +       # MINIMIZE camouflage (reduced weight)
+                         lambda_preservation * loss_preservation + # Preserve attack strength
+                         self.lambda_proximity * loss_proximity +  # Constraint (4b)
+                         self.lambda_aggregation * loss_aggregation)  # Constraint (4c)
             
             total_loss.backward()
             optimizer_attack.step()

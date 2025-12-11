@@ -15,9 +15,11 @@
 ## Dataset
 
 The datasets can be downloaded in the following link:
-
-https://www.kaggle.com/datasets/amananandrai/ag-news-classification-dataset
-
+```python
+url = "https://www.kaggle.com/datasets/amananandrai/ag-news-classification-dataset"
+train_url = "https://raw.githubusercontent.com/mhjabreel/CharCnn_Keras/master/data/ag_news_csv/train.csv"
+test_url = "https://raw.githubusercontent.com/mhjabreel/CharCnn_Keras/master/data/ag_news_csv/test.csv"
+```
 ## Install Dependencies
 
 ```python

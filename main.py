@@ -173,7 +173,9 @@ def setup_experiment(config):
                 lambda_proximity=config.get('lambda_proximity', 1.0),
                 lambda_aggregation=config.get('lambda_aggregation', 0.5),
                 graph_threshold=config.get('graph_threshold', 0.5),
-                attack_start_round=config.get('attack_start_round')
+                attack_start_round=config.get('attack_start_round'),
+                lambda_attack=config.get('lambda_attack', 2.0),
+                lambda_camouflage=config.get('lambda_camouflage', 0.3)
             )
 
         server.register_client(client)
@@ -344,23 +346,25 @@ def main():
 
         # ========== Attack Configuration ==========
         'poison_rate': 1.0,  # Base poisoning rate for attack phase (float, 0.0-1.0)
-        'attack_start_round': 0,  # Round when attack phase starts (int, learning phase before this round)
+        'attack_start_round': 5,  # Round when attack phase starts (int, CHANGED from 0 to allow learning phase to establish backdoor)
         
         # ========== Formula 4 Constraint Parameters ==========
-        'd_T': 0.5,  # Distance threshold for constraint (4b): d(w'_j(t), w_g(t)) ≤ d_T (float)
+        'd_T': 1.0,  # Distance threshold for constraint (4b): d(w'_j(t), w_g(t)) ≤ d_T (float)
         'gamma': 10.0,  # Upper bound for constraint (4c): Σ β'_{i,j}(t) d(w_i(t), w̄_i(t)) ≤ Γ (float)
         
         # ========== VGAE Training Parameters ==========
         'dim_reduction_size': 10000,  # Dimensionality for feature reduction in VGAE (int, adjust based on GPU memory)
         'vgae_epochs': 30,  # Number of epochs for VGAE training per camouflage step (int)
         'vgae_lr': 0.01,  # Learning rate for VGAE optimizer (float)
-        'vgae_lambda': 0.5,  # Weight for preservation loss in camouflage optimization (float, balances attack efficacy vs camouflage)
+        'vgae_lambda': 1.0,  # Weight for preservation loss in camouflage optimization (float)
         
         # ========== Camouflage Optimization Parameters ==========
         'camouflage_steps': 50,  # Number of optimization steps for malicious update camouflage (int)
         'camouflage_lr': 0.1,  # Learning rate for camouflage optimization (float)
-        'lambda_proximity': 2.0,  # Weight for constraint (4b) proximity loss in camouflage (float)
+        'lambda_proximity': 0.5,  # Weight for constraint (4b) proximity loss in camouflage (float)
         'lambda_aggregation': 0.5,  # Weight for constraint (4c) aggregation loss in camouflage (float)
+        'lambda_attack': 2.0,  # Weight for attack objective loss (Formula 4a) - CRITICAL for ASR (float)
+        'lambda_camouflage': 0.3,  # Weight for camouflage loss - REDUCED to preserve attack strength (float)
         
         # ========== Graph Construction Parameters ==========
         'graph_threshold': 0.5,  # Threshold for graph adjacency matrix binarization in VGAE (float, 0.0-1.0)
