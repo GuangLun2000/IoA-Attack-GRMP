@@ -349,7 +349,7 @@ def main():
 
         # ========== Attack Configuration ==========
         'poison_rate': 1.0,  # Base poisoning rate for attack phase (float, 0.0-1.0)
-        'attack_start_round': 5,  # Round when attack phase starts (int, CHANGED from 0 to allow learning phase to establish backdoor)
+        'attack_start_round': 0,  # Round when attack phase starts (int, CHANGED from 0 to allow learning phase to establish backdoor)
         
         # ========== Formula 4 Constraint Parameters ==========
         'd_T': 1.0,  # Distance threshold for constraint (4b): d(w'_j(t), w_g(t)) ≤ d_T (float)
