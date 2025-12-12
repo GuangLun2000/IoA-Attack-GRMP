@@ -369,8 +369,8 @@ def main():
         
         # ========== VGAE Training Parameters ==========
         # Reference paper: input_dim=5, hidden1_dim=32, hidden2_dim=16, num_epoch=10, lr=0.01
-        'dim_reduction_size': 30000,  # Reduced dimensionality of LLM parameters
-        'vgae_epochs': 30,  # Number of epochs for VGAE training (reference: 10)
+        'dim_reduction_size': 20000,  # Reduced dimensionality of LLM parameters
+        'vgae_epochs': 10,  # Number of epochs for VGAE training (reference: 10)
         'vgae_lr': 0.01,  # Learning rate for VGAE optimizer (reference: 0.01)
         'vgae_lambda': 2.0,  # Weight for preservation loss - HIGH to preserve poisoned update (float)
         
