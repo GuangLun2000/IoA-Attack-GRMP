@@ -346,7 +346,7 @@ def main():
         'alpha': 0.01,  # Proximal regularization coefficient α ∈ [0,1] from paper formula (1) (float)
         
         # ========== Data Distribution ==========
-        'dirichlet_alpha': 0.5,  # Dirichlet distribution parameter for non-IID data partitioning (float, lower = more heterogeneous)
+        'dirichlet_alpha': 1.0,  # Make data less extreme non-IID (higher alpha = more balanced)
         'test_sample_rate': 1.0,  # Rate of Business samples to test for ASR evaluation (float, 1.0 = all samples)
         # 'dataset_size_limit': None,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
         'dataset_size_limit': 20000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
@@ -370,12 +370,12 @@ def main():
         'camouflage_lr': 0.1,  # Learning rate for camouflage optimization (float)
         'lambda_proximity': 0.5,  # Weight for constraint (4b) proximity loss in camouflage (float)
         'lambda_aggregation': 0.5,  # Weight for constraint (4c) aggregation loss in camouflage (float)
-        'lambda_attack': 0.5,  # Weight for attack objective (direction-based) - moderate weight (float)
-        'lambda_camouflage': 0.1,  # Weight for camouflage loss (VGAE latent space) - low to preserve attack (float)
+        'lambda_attack': 1.0,  # Stronger attack objective weight
+        'lambda_camouflage': 0.05,  # Lighter camouflage to preserve attack effect
         'benign_select_ratio': 1.0,  # β subset ratio for attacker graph (data-agnostic attack)
         'dual_lr': 0.01,  # Step size for dual variable updates (λ, ρ) in Lagrangian
         'proxy_step': 0.1,  # Step size for gradient-free ascent toward global-loss proxy
-        'attacker_claimed_data_size': 1.0,  # D'(t) claimed by attacker for weighted aggregation
+        'attacker_claimed_data_size': 3.0,  # Amplify attacker weight in aggregation
         
         # ========== Graph Construction Parameters ==========
         'graph_threshold': 0.5,  # Threshold for graph adjacency matrix binarization in VGAE (float, 0.0-1.0)
