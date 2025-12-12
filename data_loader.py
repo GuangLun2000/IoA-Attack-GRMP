@@ -1,7 +1,7 @@
 # data_loader.py
 # data_loader.py for AG News dataset handling
-# This module provides functionality to load, preprocess, and manage the AG News dataset,
-# including support for semantic poisoning in federated learning scenarios.
+# This module loads and preprocesses AG News for federated experiments.
+# Note: data-agnostic attack setting — no training-time label flipping is performed.
 
 import torch
 import numpy as np
@@ -11,8 +11,7 @@ import pandas as pd
 import urllib.request
 import io
 import os
-import math
-from typing import List, Tuple, Dict, Optional
+from typing import List, Dict
 
 # Constants
 LABEL_WORLD = 0
@@ -61,9 +60,9 @@ class NewsDataset(Dataset):
 
 
 class DataManager:
-    """Manages AG News data distribution for semantic poisoning"""
+    """Manages AG News data distribution (data-agnostic attack setting)"""
 
-    def __init__(self, num_clients, num_attackers, poison_rate, test_sample_rate, test_seed,
+    def __init__(self, num_clients, num_attackers, test_sample_rate, test_seed,
                  dataset_size_limit=None, batch_size=None, test_batch_size=None):
         
         """
@@ -72,7 +71,6 @@ class DataManager:
         Args:
             num_clients: Number of federated learning clients (required)
             num_attackers: Number of attacker clients (required)
-            poison_rate: Base poisoning rate for attack phase (required)
             test_sample_rate: Rate of Business samples to test (1.0 = all, 0.5 = random 50%) (required)
             test_seed: Random seed for test sampling (required)
             dataset_size_limit: Limit dataset size for faster experimentation (None = use full dataset, per paper)
@@ -87,7 +85,6 @@ class DataManager:
 
         self.num_clients = num_clients
         self.num_attackers = num_attackers
-        self.base_poison_rate = poison_rate
         self.test_sample_rate = test_sample_rate  # Rate of Business samples to test (1.0 = all, 0.5 = random 50%)
         self.test_seed = test_seed  # Seed for random testing
         self.dataset_size_limit = dataset_size_limit  # Limit for faster experimentation (None = full dataset)
@@ -188,126 +185,23 @@ class DataManager:
         else:
             print(f"  ✅ Using FULL AG News dataset (per paper requirements)")
 
-    def _poison_data_progressive(self, texts: List[str], labels: List[int],
-                                effective_poison_rate: float, 
-                                client_id: int = 0, round_num: int = 0) -> Tuple[List[str], List[int]]:
+    def get_empty_loader(self) -> DataLoader:
+        """Return an empty loader for data-agnostic attackers."""
+        return DataLoader(NewsDataset([], [], self.tokenizer), batch_size=self.batch_size, shuffle=False)
+
+    def get_proxy_eval_loader(self, sample_size: int = 128) -> DataLoader:
         """
-        Complete poisoning logic: ALL Business samples are poisoned to Sports.
-        
-        When effective_poison_rate >= 1.0: ALL Business samples are flipped to Sports.
-        When effective_poison_rate < 1.0: Randomly select and flip based on rate.
-        
-        Args:
-            texts: List of text samples
-            labels: List of original labels
-            effective_poison_rate: Poisoning rate (1.0 = 100%, all Business -> Sports)
-            client_id: Client ID for reproducibility
-            round_num: Round number for reproducibility
-            
-        Returns:
-            Tuple of (poisoned_texts, poisoned_labels) where ALL Business samples are flipped to Sports
+        Small clean proxy set for attacker-side F(w'_g) estimation.
+        Uses a deterministic subset of the test set (no label flips).
         """
-        poisoned_texts = list(texts)
-        poisoned_labels = list(labels)
-        poison_count = 0
-
-        # Collect eligible samples: ALL Business news (not filtered by keywords)
-        # Per paper Section IV: Keywords are ONLY for testing, NOT for training
-        eligible_samples = []
-        for i, (text, label) in enumerate(zip(texts, labels)):
-            # Target ALL Business news (2) for poisoning during training
-            # No keyword filtering or prioritization in training
-            if label == LABEL_BUSINESS:
-                eligible_samples.append(i)
-
-        if not eligible_samples:
-            return poisoned_texts, poisoned_labels
-
-        # For complete poisoning (rate >= 1.0), poison ALL eligible samples directly
-        # For partial poisoning, shuffle and select based on rate
-        if effective_poison_rate >= 1.0:
-            # Complete poisoning: Flip ALL Business samples to Sports
-            max_poison = len(eligible_samples)
-            for idx in eligible_samples:
-                poisoned_labels[idx] = TARGET_LABEL  # Flip to Sports
-                poison_count += 1
-        else:
-            # Partial poisoning: Shuffle and select based on rate
-            poison_seed = hash((client_id, round_num)) % (2**31)  # Convert to valid seed
-            rng = np.random.default_rng(poison_seed)
-            eligible_samples = np.array(eligible_samples)
-            rng.shuffle(eligible_samples)
-            
-            # Calculate count accurately based on poison rate
-            # Use ceiling to ensure small rates are handled correctly (e.g., 2% of 10 = 1, not 0)
-            if effective_poison_rate > 0:
-                # Calculate exact number using ceiling for accuracy
-                max_poison = math.ceil(len(eligible_samples) * effective_poison_rate)
-                # Ensure not exceeding total (should never happen, but safety check)
-                max_poison = min(max_poison, len(eligible_samples))
-            else:
-                max_poison = 0
-
-            # Perform flipping (randomly selected Business samples)
-            for idx in eligible_samples[:max_poison]:
-                poisoned_labels[idx] = TARGET_LABEL  # Flip to Sports
-                poison_count += 1
-
-        if effective_poison_rate > 0:
-            print(f"  Poisoning Logic (rate={effective_poison_rate:.1%}): "
-                f"{poison_count}/{len(eligible_samples)} eligible samples poisoned.")
-
-        return poisoned_texts, poisoned_labels
-
-    def get_attacker_data_loader(self, client_id: int, indices: List[int],
-                                round_num: int = 0, attack_start_round: int = 10) -> DataLoader:
-        """
-        Generates dataloader for attacker.
-        Modified for complete poisoning: ALL Business samples are poisoned to Sports.
-        - All rounds: Use base_poison_rate (typically 1.0 for 100% poisoning)
-        """
-        # [CRITICAL] Deterministic sort to prevent flip-flopping
-        indices = sorted(indices)
-        
-        client_texts = [self.train_texts[i] for i in indices]
-        client_labels = [self.train_labels[i] for i in indices]
-
-        # Complete Poisoning Strategy: Always use base_poison_rate for ALL rounds
-        # This ensures ALL Business samples are poisoned to Sports from the start
-        effective_rate = self.base_poison_rate
-        print(f"  [Round {round_num}] Complete Poisoning: ALL Business -> Sports (rate={effective_rate:.1%})")
-
-        poisoned_texts, poisoned_labels = self._poison_data_progressive(
-            client_texts, client_labels, effective_rate, client_id=client_id, round_num=round_num
-        )
-
-        dataset = NewsDataset(poisoned_texts, poisoned_labels, self.tokenizer)
-        return DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
-
-    def get_attacker_original_business_loader(self, client_id: int, indices: List[int]) -> DataLoader:
-        """
-        Get original Business data loader (labels NOT flipped) for attack loss computation.
-        This is used to compute attack loss on original Business samples (label=2) 
-        to ensure the model predicts them as Sports (label=1).
-        """
-        indices = sorted(indices)
-        client_texts = [self.train_texts[i] for i in indices]
-        client_labels = [self.train_labels[i] for i in indices]
-        
-        # Filter only Business samples (label=2) with original labels
-        business_texts = []
-        business_labels = []
-        for text, label in zip(client_texts, client_labels):
-            if label == LABEL_BUSINESS:
-                business_texts.append(text)
-                business_labels.append(LABEL_BUSINESS)  # Keep original Business label
-        
-        if not business_texts:
-            # Return empty loader if no business samples
-            return DataLoader(NewsDataset([], [], self.tokenizer), batch_size=self.batch_size, shuffle=False)
-        
-        dataset = NewsDataset(business_texts, business_labels, self.tokenizer)
-        return DataLoader(dataset, batch_size=self.batch_size, shuffle=False)
+        if not self.test_texts:
+            return self.get_empty_loader()
+        rng = np.random.default_rng(self.test_seed)
+        idx = rng.choice(len(self.test_texts), size=min(sample_size, len(self.test_texts)), replace=False)
+        proxy_texts = [self.test_texts[i] for i in idx]
+        proxy_labels = [self.test_labels[i] for i in idx]
+        dataset = NewsDataset(proxy_texts, proxy_labels, self.tokenizer)
+        return DataLoader(dataset, batch_size=self.test_batch_size, shuffle=False)
 
     def get_test_loader(self) -> DataLoader:
         """Get clean global test loader"""

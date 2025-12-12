@@ -44,8 +44,7 @@ def setup_experiment(config):
     # Set dataset_size_limit to a positive int (e.g., 30000) only for faster experimentation
     data_manager = DataManager(
         num_clients=config['num_clients'],
-        num_attackers=config['num_attackers'], 
-        poison_rate=config['poison_rate'],
+        num_attackers=config['num_attackers'],
         test_sample_rate=config.get('test_sample_rate', 1.0),  # 1.0 = test all Business samples
         test_seed=config.get('seed', 42),  # Use same seed for reproducibility
         dataset_size_limit=config.get('dataset_size_limit', None),  # None = full dataset (per paper)
@@ -151,7 +150,8 @@ def setup_experiment(config):
                 data_loader=client_loader,
                 lr=config['client_lr'],
                 local_epochs=config['local_epochs'],
-                alpha=config.get('alpha', 0.01)
+                alpha=config.get('alpha', 0.01),
+                data_indices=client_indices[client_id]
             )
         else:
             # --- Attacker Client ---
@@ -175,7 +175,11 @@ def setup_experiment(config):
                 graph_threshold=config.get('graph_threshold', 0.5),
                 attack_start_round=config.get('attack_start_round'),
                 lambda_attack=config.get('lambda_attack', 2.0),
-                lambda_camouflage=config.get('lambda_camouflage', 0.3)
+                lambda_camouflage=config.get('lambda_camouflage', 0.3),
+                benign_select_ratio=config.get('benign_select_ratio', 1.0),
+                dual_lr=config.get('dual_lr', 0.01),
+                proxy_step=config.get('proxy_step', 0.1),
+                claimed_data_size=config.get('attacker_claimed_data_size', 1.0)
             )
 
         server.register_client(client)
@@ -198,8 +202,9 @@ def run_experiment(config):
     progressive_metrics = {
         'rounds': [],
         'clean_acc': [],
-        'attack_asr': [],
-        'defense_threshold': []
+        'acc_diff': [],
+        'rejection_rate': [],
+        'agg_update_norm': []
     }
 
     try:
@@ -209,8 +214,9 @@ def run_experiment(config):
             # Track metrics
             progressive_metrics['rounds'].append(round_num + 1)
             progressive_metrics['clean_acc'].append(round_log['clean_accuracy'])
-            progressive_metrics['attack_asr'].append(round_log['attack_success_rate'])
-            progressive_metrics['defense_threshold'].append(round_log['defense']['threshold'])
+            progressive_metrics['acc_diff'].append(round_log.get('acc_diff', 0.0))
+            progressive_metrics['rejection_rate'].append(round_log['defense'].get('rejection_rate', 0.0))
+            progressive_metrics['agg_update_norm'].append(round_log['defense'].get('aggregated_update_norm', 0.0))
             
             # Memory cleanup after each round
             gc.collect()
@@ -309,8 +315,6 @@ def run_no_attack_experiment(config_base: Dict) -> Dict:
     config = config_base.copy()
     config['experiment_name'] = config_base.get('experiment_name', 'baseline') + '_no_attack'
     config['num_attackers'] = 0  # No attackers
-    config['poison_rate'] = 0.0  # No poisoning
-    
     print("\n" + "=" * 60)
     print("Running BASELINE Experiment (NO ATTACK)")
     print("=" * 60)
@@ -329,13 +333,13 @@ def main():
         # ========== Federated Learning Setup ==========
         'num_clients': 6,  # Total number of federated learning clients (int)
         'num_attackers': 2,  # Number of attacker clients (int, must be < num_clients)
-        'num_rounds': 50,  # Total number of federated learning rounds (int)
+        'num_rounds': 30,  # Total number of federated learning rounds (int)
         
         # ========== Training Hyperparameters ==========
         'client_lr': 2e-5,  # Learning rate for local client training (float)
         'server_lr': 0.8,  # Server learning rate for model aggregation (float, typically 0.5-1.0)
-        'batch_size': 128,  # Batch size for local training (int)
-        'test_batch_size': 128,  # Batch size for test/validation data loaders (int)
+        'batch_size': 256,  # Batch size for local training (int)
+        'test_batch_size': 256,  # Batch size for test/validation data loaders (int)
         
         # 'local_epochs': 5,  # Number of local training epochs per round (int, per paper Section IV)
         'local_epochs': 5,  # Number of local training epochs per round (int, per paper Section IV)
@@ -345,10 +349,9 @@ def main():
         'dirichlet_alpha': 0.5,  # Dirichlet distribution parameter for non-IID data partitioning (float, lower = more heterogeneous)
         'test_sample_rate': 1.0,  # Rate of Business samples to test for ASR evaluation (float, 1.0 = all samples)
         # 'dataset_size_limit': None,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
-        'dataset_size_limit': 10000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
+        'dataset_size_limit': 20000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
 
         # ========== Attack Configuration ==========
-        'poison_rate': 1.0,  # Complete poisoning: ALL Business samples -> Sports (1.0 = 100%, all rounds)
         'attack_start_round': 0,  # Round when attack phase starts (int, now all rounds use complete poisoning)
         
         # ========== Formula 4 Constraint Parameters ==========
@@ -369,6 +372,10 @@ def main():
         'lambda_aggregation': 0.5,  # Weight for constraint (4c) aggregation loss in camouflage (float)
         'lambda_attack': 0.5,  # Weight for attack objective (direction-based) - moderate weight (float)
         'lambda_camouflage': 0.1,  # Weight for camouflage loss (VGAE latent space) - low to preserve attack (float)
+        'benign_select_ratio': 1.0,  # β subset ratio for attacker graph (data-agnostic attack)
+        'dual_lr': 0.01,  # Step size for dual variable updates (λ, ρ) in Lagrangian
+        'proxy_step': 0.1,  # Step size for gradient-free ascent toward global-loss proxy
+        'attacker_claimed_data_size': 1.0,  # D'(t) claimed by attacker for weighted aggregation
         
         # ========== Graph Construction Parameters ==========
         'graph_threshold': 0.5,  # Threshold for graph adjacency matrix binarization in VGAE (float, 0.0-1.0)

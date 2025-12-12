@@ -118,6 +118,7 @@ class Server:
                           client_ids: List[int]) -> Dict:
         # Store client_ids for similarity display
         self._current_client_ids = client_ids
+        self._sorted_client_ids = client_ids
         """
         Aggregate updates - Enhanced stability version.
         Uses a more lenient defense mechanism and smooth update strategy.
@@ -152,21 +153,26 @@ class Server:
         rejection_rate = len(rejected_indices) / len(updates)
         self.history['rejection_rates'].append(rejection_rate)
 
-        defense_log = {
-            'similarities': similarities.tolist(),
-            'accepted_clients': [client_ids[i] for i in accepted_indices],
-            'rejected_clients': [client_ids[i] for i in rejected_indices],
-            'threshold': dynamic_threshold,
-            'mean_similarity': mean_sim,
-            'std_similarity': std_sim,
-            'tolerance_factor': self.tolerance_factor,
-            'rejection_rate': rejection_rate
-        }
-
         # Aggregate updates from accepted clients
+        aggregated_update_norm = 0.0
         if accepted_indices:
             accepted_updates = [updates[i] for i in accepted_indices]
-            aggregated_update = torch.stack(accepted_updates).mean(dim=0)
+            # Weighted aggregation by claimed data sizes (paper: D_i/D(t)).
+            # For benign clients, try to use their data_indices length if available.
+            weights = []
+            for i in accepted_indices:
+                cid = client_ids[i]
+                client = self.clients[cid]
+                if getattr(client, 'is_attacker', False):
+                    w = getattr(client, 'claimed_data_size', 1.0)
+                else:
+                    w = len(getattr(client, 'data_indices', [])) or 1.0
+                weights.append(w)
+            weight_tensor = torch.tensor(weights, device=self.device, dtype=accepted_updates[0].dtype)
+            weight_tensor = weight_tensor / weight_tensor.sum()
+            stacked = torch.stack(accepted_updates)
+            aggregated_update = (stacked * weight_tensor.view(-1, 1)).sum(dim=0)
+            aggregated_update_norm = torch.norm(aggregated_update).item()
 
             # Smooth the global model update using server learning rate (key improvement)
             current_params = self.global_model.get_flat_params()
@@ -175,8 +181,21 @@ class Server:
 
             print(f"  📊 Update Stats: Accepted {len(accepted_indices)}/{len(updates)} updates")
             print(f"  🔧 Server Learning Rate: {self.server_lr} (Smooth updates)")
+            print(f"  📐 Aggregated update norm: {aggregated_update_norm:.6f}")
         else:
             print("  ⚠️ Warning: No updates were accepted this round!")
+
+        defense_log = {
+            'similarities': similarities.tolist(),
+            'accepted_clients': [client_ids[i] for i in accepted_indices],
+            'rejected_clients': [client_ids[i] for i in rejected_indices],
+            'threshold': dynamic_threshold,
+            'mean_similarity': mean_sim,
+            'std_similarity': std_sim,
+            'tolerance_factor': self.tolerance_factor,
+            'rejection_rate': rejection_rate,
+            'aggregated_update_norm': aggregated_update_norm
+        }
 
         return defense_log
 
@@ -378,6 +397,8 @@ class Server:
             'round': round_num + 1,
             'clean_accuracy': clean_acc,
             'attack_success_rate': attack_asr,
+            'acc_diff': (abs(clean_acc - self.history['clean_acc'][-2])
+                         if len(self.history['clean_acc']) > 1 else 0.0),
             'defense': defense_log,
             'stage': stage,
             'server_lr': self.server_lr,

@@ -10,6 +10,7 @@ import numpy as np
 from typing import Dict, List, Optional
 from tqdm import tqdm
 from models import VGAE
+from torch.nn.utils import stateless
 
 # Client class for federated learning
 class Client:
@@ -61,6 +62,12 @@ class Client:
 
 # BenignClient class for benign clients
 class BenignClient(Client):
+
+    def __init__(self, client_id: int, model: nn.Module, data_loader, lr, local_epochs, alpha,
+                 data_indices=None):
+        super().__init__(client_id, model, data_loader, lr, local_epochs, alpha)
+        # Track assigned data indices for proper aggregation weighting
+        self.data_indices = data_indices or []
 
     def prepare_for_round(self, round_num: int):
         """Benign clients do not require special preparation."""
@@ -129,7 +136,11 @@ class AttackerClient(Client):
                  dim_reduction_size=10000, vgae_lambda=0.5,
                  vgae_epochs=20, vgae_lr=0.01, camouflage_steps=30, camouflage_lr=0.1,
                  lambda_proximity=1.0, lambda_aggregation=0.5, graph_threshold=0.5,
-                 attack_start_round=10, lambda_attack=2.0, lambda_camouflage=0.3):
+                 attack_start_round=10, lambda_attack=2.0, lambda_camouflage=0.3,
+                 benign_select_ratio=1.0, dual_lr=0.01,
+                 lambda_dual_init=0.0, rho_dual_init=0.0,
+                 proxy_step=0.1,
+                 claimed_data_size=1.0):
         """
         Initialize an attacker client with VGAE-based camouflage capabilities.
         
@@ -153,6 +164,12 @@ class AttackerClient(Client):
             attack_start_round: Round when attack phase starts (default: 10)
             lambda_attack: Weight for attack objective loss (default: 2.0) - CRITICAL for ASR
             lambda_camouflage: Weight for camouflage loss (default: 0.3) - Lower to preserve attack
+            benign_select_ratio: Ratio of benign updates selected for graph (β subset, default: 1.0)
+            dual_lr: Step size for dual variable updates (λ, ρ) in Lagrangian (default: 0.01)
+            lambda_dual_init: Initial dual variable λ for constraint (4b) (default: 0.0)
+            rho_dual_init: Initial dual variable ρ for constraint (4c) (default: 0.0)
+            proxy_step: Step size for gradient-free ascent toward global-loss proxy (default: 0.1)
+            claimed_data_size: Reported data size D'_j(t) for weighted aggregation (default: 1.0)
         
         Note: lr, local_epochs, and alpha must be explicitly provided to ensure consistency
         with config settings. Other parameters have defaults but should be set via config in main.py.
@@ -173,8 +190,14 @@ class AttackerClient(Client):
         self.graph_threshold = graph_threshold
         self.lambda_attack = lambda_attack  # Weight for attack objective (Formula 4a)
         self.lambda_camouflage = lambda_camouflage  # Weight for camouflage (reduced to preserve attack)
+        self.benign_select_ratio = benign_select_ratio  # β selection ratio for benign updates
+        self.dual_lr = dual_lr
+        self.lambda_dual = lambda_dual_init  # Dual variable for constraint (4b)
+        self.rho_dual = rho_dual_init      # Dual variable for constraint (4c)
+        self.proxy_step = proxy_step
+        self.claimed_data_size = claimed_data_size  # For weighted aggregation (paper: D'(t))
 
-        dummy_loader = data_manager.get_attacker_data_loader(client_id, data_indices, 0, self.attack_start_round)
+        dummy_loader = data_manager.get_empty_loader()
         super().__init__(client_id, model, dummy_loader, lr, local_epochs, alpha)
         self.is_attacker = True
 
@@ -184,72 +207,70 @@ class AttackerClient(Client):
         self.benign_updates = []
         self.feature_indices = None
         
-        # Store original business data loader (for attack loss computation)
-        # This contains Business samples with ORIGINAL labels (not flipped)
-        self.original_business_loader = data_manager.get_attacker_original_business_loader(
-            client_id, data_indices
-        )
+        # Data-agnostic attack: no local data usage
+        self.original_business_loader = None
+        self.proxy_loader = data_manager.get_proxy_eval_loader()
         
         # Formula 4 constraints parameters
         self.d_T = None  # Distance threshold for constraint (4b): d(w'_j(t), w_g(t)) ≤ d_T
         self.gamma = None  # Upper bound for constraint (4c): Σ β'_{i,j}(t) d(w_i(t), w̄_i(t)) ≤ Γ
         self.global_model_params = None  # Store global model params for constraint (4b)
+        self._flat_numel = self.model.get_flat_params().numel()
 
     def prepare_for_round(self, round_num: int):
         """Prepare for a new training round."""
         self.set_round(round_num)
-        # Update dataloader with progressive poisoning logic
-        self.data_loader = self.data_manager.get_attacker_data_loader(
-            self.client_id, self.data_indices, round_num, self.attack_start_round
-        )
+        # Data-agnostic attacker keeps an empty loader
+        self.data_loader = self.data_manager.get_empty_loader()
 
     def receive_benign_updates(self, updates: List[torch.Tensor]):
         """Receive updates from benign clients."""
         # Store detached copies to avoid graph retention issues
         self.benign_updates = [u.detach().clone() for u in updates]
 
+    def _select_benign_subset(self) -> List[torch.Tensor]:
+        """
+        Select a subset of benign updates (β selection) to build the graph,
+        approximating the 0-1 knapsack in the paper. We use a simple heuristic:
+        pick the farthest updates from the mean until ratio or gamma budget is met.
+        """
+        if not self.benign_updates:
+            return []
+        target_k = max(1, int(len(self.benign_updates) * self.benign_select_ratio))
+        benign_stack = torch.stack(self.benign_updates)
+        benign_mean = benign_stack.mean(dim=0)
+        distances = torch.norm(benign_stack - benign_mean, dim=1)
+        # Sort by distance descending
+        sorted_idx = torch.argsort(distances, descending=True)
+        selected = []
+        total_dist = 0.0
+        for idx in sorted_idx:
+            if len(selected) >= target_k:
+                break
+            d = distances[idx].item()
+            # If gamma is set, enforce cumulative distance budget
+            if self.gamma is not None and (total_dist + d) > self.gamma:
+                continue
+            selected.append(self.benign_updates[idx])
+            total_dist += d
+        if not selected:
+            # Fallback: take the farthest one
+            selected = [self.benign_updates[sorted_idx[0]]]
+        return selected
+
     def local_train(self, epochs=None) -> torch.Tensor:
         """
-        Perform local training to get the initial malicious update.
-        According to paper formula (1): F(w_i(t)) = (1/D_i(t)) * Σ f(...) + α ζ(w_i(t))
+        Data-agnostic attacker (VGAE-MP): do NOT train on local/poisoned data.
+        Simply return a zero update; the real malicious update is generated later
+        in `camouflage_update` using benign updates + VGAE+GSP.
         """
-        if epochs is None:
-            epochs = self.local_epochs
-
-        self.model.train()
+        # We intentionally skip any local data training to align with the paper's
+        # data-agnostic assumption. Returning zero ensures the baseline update
+        # does not introduce unintended gradients; the attack is injected in
+        # the camouflage stage.
         initial_params = self.model.get_flat_params().clone()
-        
-        # Proximal regularization coefficient (paper formula (1): α ∈ [0,1])
-        mu = self.alpha
-        
-        # 1. Standard training on poisoned data with regularization
-        for epoch in range(epochs):
-            for batch in self.data_loader:
-                input_ids = batch['input_ids'].to(self.device)
-                attention_mask = batch['attention_mask'].to(self.device)
-                labels = batch['labels'].to(self.device)
-
-                outputs = self.model(input_ids, attention_mask)
-                ce_loss = nn.CrossEntropyLoss()(outputs, labels)
-                
-                # Add proximal regularization term (paper formula (1))
-                current_params = self.model.get_flat_params()
-                proximal_term = mu * torch.norm(current_params - initial_params) ** 2
-                loss = ce_loss + proximal_term
-
-                self.optimizer.zero_grad()
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                self.optimizer.step()
-        
-        # Get raw malicious update
-        poisoned_update = self.get_model_update(initial_params)
-        
-        # NOTE: Do NOT apply camouflage here!
-        # Camouflage is applied in server.run_round() after collecting benign updates.
-        # Applying it here would cause double camouflage.
-        
-        return poisoned_update
+        zero_update = torch.zeros_like(initial_params)
+        return zero_update
 
     def _get_reduced_features(self, updates: List[torch.Tensor], fix_indices=True) -> torch.Tensor:
         """
@@ -271,6 +292,57 @@ class AttackerClient(Client):
         # Select features
         reduced_features = torch.index_select(stacked_updates, 1, self.feature_indices)
         return reduced_features
+
+    def _flat_to_param_dict(self, flat_params: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """Convert flat tensor to param dict for stateless.functional_call."""
+        param_dict = {}
+        offset = 0
+        for name, param in self.model.named_parameters():
+            numel = param.numel()
+            param_dict[name] = flat_params[offset:offset + numel].view_as(param)
+            offset += numel
+        return param_dict
+
+    def _proxy_global_loss(self, malicious_update: torch.Tensor, max_batches: int = 1) -> torch.Tensor:
+        """
+        Differentiable proxy for F(w'_g): cross-entropy on a small clean subset,
+        using stateless.functional_call with (w_g + malicious_update).
+        """
+        if self.global_model_params is None or self.proxy_loader is None:
+            return torch.tensor(0.0, device=self.device)
+
+        # Ensure shapes match
+        if malicious_update.numel() != self._flat_numel:
+            malicious_update = malicious_update.view(-1)
+
+        candidate_params = self.global_model_params + malicious_update
+        param_dict = self._flat_to_param_dict(candidate_params)
+
+        total_loss = 0.0
+        batches = 0
+
+        for batch in self.proxy_loader:
+            input_ids = batch['input_ids'].to(self.device)
+            attention_mask = batch['attention_mask'].to(self.device)
+            labels = batch['labels'].to(self.device)
+
+            logits = stateless.functional_call(
+                self.model,
+                param_dict,
+                args=(),
+                kwargs={'input_ids': input_ids, 'attention_mask': attention_mask}
+            )
+
+            ce_loss = F.cross_entropy(logits, labels)
+            total_loss = total_loss + ce_loss
+            batches += 1
+            if batches >= max_batches:
+                break
+
+        if batches == 0:
+            return torch.tensor(0.0, device=self.device)
+
+        return total_loss / batches
 
     def _construct_graph(self, reduced_features: torch.Tensor):
         """
@@ -501,10 +573,15 @@ class AttackerClient(Client):
         # ============================================================
         # STEP 1: Prepare feature matrix F ∈ R^{I×M}
         # ============================================================
-        benign_stack = torch.stack([u.detach() for u in self.benign_updates])  # (I, full_dim)
+        selected_benign = self._select_benign_subset()
+        if not selected_benign:
+            print(f"    [Attacker {self.client_id}] No benign subset selected, fallback to raw poisoned update")
+            return poisoned_update
+
+        benign_stack = torch.stack([u.detach() for u in selected_benign])  # (I, full_dim)
         
         # Reduce dimensionality for computational efficiency
-        reduced_benign = self._get_reduced_features(self.benign_updates, fix_indices=False)  # (I, M)
+        reduced_benign = self._get_reduced_features(selected_benign, fix_indices=False)  # (I, M)
         M = reduced_benign.shape[1]
         I = reduced_benign.shape[0]
         
@@ -529,39 +606,88 @@ class AttackerClient(Client):
         )
         
         # ============================================================
-        # STEP 5: Combine GSP attack with poisoned update
-        # The GSP attack provides the camouflage direction
-        # The poisoned update provides the attack direction
-        # ============================================================
-        
-        # Expand GSP attack back to full dimension
-        # Only modify the reduced indices, keep rest from poisoned_update
-        malicious_update = poisoned_update.clone()
-        
+        # STEP 5: Use GSP attack as the malicious update (data-agnostic)
+        # Expand GSP attack back to full dimension; non-selected dims remain zero.
+        malicious_update = torch.zeros_like(poisoned_update)
         if self.feature_indices is not None and gsp_attack_reduced is not None:
-            # Blend: combine poisoned update with GSP-generated attack
-            # Paper: attack vector replaces part of the benign weights
-            blend_ratio = 0.7  # 70% poisoned (attack), 30% GSP (camouflage)
-            
-            # Get the reduced portion of poisoned update
-            poisoned_reduced = poisoned_update[self.feature_indices]
-            
-            # Blend poisoned with GSP attack
-            blended_reduced = blend_ratio * poisoned_reduced + (1 - blend_ratio) * gsp_attack_reduced
-            
-            # Put back into full update
-            malicious_update[self.feature_indices] = blended_reduced
+            malicious_update[self.feature_indices] = gsp_attack_reduced
         
         # ============================================================
-        # STEP 6: Apply constraint (4b): d(w'_j, w'_g) ≤ d_T
+        # STEP 6: Lagrangian-style objective & dual updates (approximation)
+        # attack_obj ~ deviation from benign mean (maximize)
+        # constraint_b: d(w'_j, w'_g) ≤ d_T  (we approximate dist by ||malicious_update||)
+        # constraint_c: sum β d(w_i, \bar w_i) ≤ Γ (use selected benign subset)
         # ============================================================
         benign_norms = torch.stack([torch.norm(u) for u in self.benign_updates])
-        target_norm = benign_norms.mean() + 0.3 * benign_norms.std()
+        benign_mean_full = torch.stack([u.detach() for u in self.benign_updates]).mean(dim=0)
+        attack_obj = torch.norm(malicious_update - benign_mean_full)
         
+        # Constraint (4b)
+        constraint_b = torch.tensor(0.0, device=self.device)
+        if self.d_T is not None:
+            dist_global = torch.norm(malicious_update)
+            constraint_b = F.relu(dist_global - self.d_T)
+        
+        # Constraint (4c)
+        constraint_c = torch.tensor(0.0, device=self.device)
+        if self.gamma is not None and len(selected_benign) > 0:
+            sel_stack = torch.stack(selected_benign)
+            sel_mean = sel_stack.mean(dim=0)
+            distances = torch.norm(sel_stack - sel_mean, dim=1)
+            agg_dist = distances.sum()
+            constraint_c = F.relu(agg_dist - self.gamma)
+        
+        # Lagrangian (no backprop here; used for dual updates and logging)
+        lagrangian = -attack_obj
+        if self.d_T is not None:
+            lagrangian = lagrangian + self.lambda_dual * constraint_b
+        if self.gamma is not None:
+            lagrangian = lagrangian + self.rho_dual * constraint_c
+        
+        # Dual variable updates (projected, step size dual_lr)
+        if self.d_T is not None:
+            self.lambda_dual = max(0.0, self.lambda_dual + self.dual_lr * constraint_b.item())
+        if self.gamma is not None:
+            self.rho_dual = max(0.0, self.rho_dual + self.dual_lr * constraint_c.item())
+        
+        # ============================================================
+        # STEP 7: Proxy ascent toward global loss (gradient-based on proxy norm)
+        # Use a small optimizer on malicious_update to maximize its norm while respecting constraints
+        proxy_steps = 5
+        proxy_lr = self.proxy_step
+        proxy_param = malicious_update.clone().detach().to(self.device)
+        proxy_param.requires_grad_(True)
+        proxy_opt = optim.Adam([proxy_param], lr=proxy_lr)
+        for _ in range(proxy_steps):
+            proxy_opt.zero_grad()
+            # Proxy objective: maximize F(w'_g) via CE loss on clean subset, minus penalties
+            proxy_obj = self._proxy_global_loss(proxy_param, max_batches=1)
+            proxy_penalty = torch.tensor(0.0, device=self.device)
+            if self.d_T is not None:
+                proxy_penalty = proxy_penalty + F.relu(torch.norm(proxy_param) - self.d_T)
+            if self.gamma is not None and len(selected_benign) > 0:
+                sel_stack = torch.stack(selected_benign)
+                sel_mean = sel_stack.mean(dim=0)
+                distances = torch.norm(sel_stack - sel_mean, dim=1)
+                agg_dist = distances.sum()
+                proxy_penalty = proxy_penalty + F.relu(agg_dist - self.gamma)
+            # Maximize (proxy_obj - penalty) => minimize negative
+            proxy_loss = -(proxy_obj - proxy_penalty)
+            proxy_loss.backward()
+            proxy_opt.step()
+        malicious_update = proxy_param.detach()
+        
+        # STEP 8: Apply norm matching + (4b) clipping for camouflage
+        # ============================================================
+        target_norm = benign_norms.mean() + 0.3 * benign_norms.std()
+        # If d_T is set, cap the desired norm to d_T to approximate constraint (4b)
+        if self.d_T is not None:
+            target_norm = min(target_norm, self.d_T)
         current_norm = torch.norm(malicious_update)
         if current_norm > 1e-8:
             scale_factor = target_norm / current_norm
-            scale_factor = torch.clamp(scale_factor, 0.5, 1.5)
+            # Allow slightly larger scaling to push attack, but capped by d_T
+            scale_factor = torch.clamp(scale_factor, 0.5, 2.0)
             malicious_update = malicious_update * scale_factor
         
         if self.d_T is not None:
@@ -569,36 +695,7 @@ class AttackerClient(Client):
             if update_norm > self.d_T:
                 malicious_update = malicious_update * (self.d_T / update_norm)
         
-        print(f"    [Attacker {self.client_id}] GSP Attack: norm={torch.norm(malicious_update):.4f}")
+        print(f"    [Attacker {self.client_id}] GSP Attack: norm={torch.norm(malicious_update):.4f}, "
+              f"attack_obj={attack_obj:.4f}, λ={self.lambda_dual:.4f}, ρ={self.rho_dual:.4f}")
         
         return malicious_update.detach()
-        
-        # ============================================================
-        # STEP 4: Scale to match benign update statistics
-        # This helps evade norm-based detection while preserving direction
-        # ============================================================
-        
-        # Target norm: slightly above benign average (more impact but not suspicious)
-        target_norm = benign_norms.mean() + 0.3 * benign_norms.std()
-        
-        current_norm = torch.norm(blended_update)
-        if current_norm > 1e-8:
-            # Scale to target norm
-            scale_factor = target_norm / current_norm
-            # Limit scaling to reasonable range
-            scale_factor = torch.clamp(scale_factor, 0.5, 1.5)
-            blended_update = blended_update * scale_factor
-        
-        # ============================================================
-        # STEP 5: Apply constraint (4b) if needed
-        # d(w'_j(t), w_g(t)) ≤ d_T
-        # ============================================================
-        if self.d_T is not None:
-            update_norm = torch.norm(blended_update)
-            if update_norm > self.d_T:
-                blended_update = blended_update * (self.d_T / update_norm)
-        
-        print(f"    [Attacker {self.client_id}] Camouflage: blend={blend_ratio:.1%}, "
-              f"norm={torch.norm(blended_update):.4f} (benign avg={benign_norms.mean():.4f})")
-        
-        return blended_update.detach()

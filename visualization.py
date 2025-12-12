@@ -39,87 +39,71 @@ class ExperimentVisualizer:
         with open(results_path, 'r') as f:
             return json.load(f)
     
-    def plot_figure3_global_accuracy_asr(self, log_data: List[Dict], save_path: Optional[str] = None, num_rounds: Optional[int] = None):
+    def plot_figure3_global_accuracy_stability(self, log_data: List[Dict], save_path: Optional[str] = None, num_rounds: Optional[int] = None):
         """
-        Figure 3: Impact of the GRMP attack on global model learning accuracy 
-        and the attack success rate (ASR) over communication rounds.
-        
-        Args:
-            log_data: List of round logs
-            save_path: Path to save the figure
-            num_rounds: Total number of rounds (for validation)
+        Figure 3 (revised): Global learning accuracy, stability (|Δacc|), and rejection rate.
+        Suitable for data-agnostic poisoning where ASR is not the key metric.
         """
         rounds = [log['round'] for log in log_data]
-        clean_acc = [log['clean_accuracy'] for log in log_data]
-        asr = [log['attack_success_rate'] for log in log_data]
+        clean_acc = [log.get('clean_accuracy', 0.0) for log in log_data]
+        rejection_rate = [log.get('defense', {}).get('rejection_rate', 0.0) for log in log_data]
         
-        # Validate data length
+        # Accuracy change magnitude |Δacc|
+        acc_diff = [0.0]
+        for i in range(1, len(clean_acc)):
+            acc_diff.append(abs(clean_acc[i] - clean_acc[i-1]))
+        
+        # Validate/pad
         if num_rounds is not None and len(rounds) != num_rounds:
             print(f"  ⚠️  Warning: Figure 3 - Expected {num_rounds} rounds, got {len(rounds)}")
+            expected_rounds = list(range(1, num_rounds + 1))
             if len(rounds) < num_rounds:
-                # Pad missing rounds
-                expected_rounds = list(range(1, num_rounds + 1))
-                missing_rounds = [r for r in expected_rounds if r not in rounds]
-                for r in missing_rounds:
-                    rounds.append(r)
+                missing = [r for r in expected_rounds if r not in rounds]
+                for _ in missing:
+                    rounds.append(expected_rounds[len(rounds)])
                     clean_acc.append(clean_acc[-1] if clean_acc else 0.0)
-                    asr.append(asr[-1] if asr else 0.0)
-                print(f"     Padded {len(missing_rounds)} missing rounds")
+                    rejection_rate.append(rejection_rate[-1] if rejection_rate else 0.0)
+                    acc_diff.append(0.0)
+                print(f"     Padded {len(missing)} missing rounds")
         
         fig, ax1 = plt.subplots(figsize=(10, 6))
-        
-        # Left Y-axis: Global Learning Accuracy
         color_acc = 'tab:blue'
         ax1.set_xlabel('Communication Round', fontsize=12, fontweight='bold')
         ax1.set_ylabel('Global Learning Accuracy', color=color_acc, fontsize=12, fontweight='bold')
-        
-        # Plot mean accuracy with range (for single run, use the value itself)
-        line1 = ax1.plot(rounds, clean_acc, 'o-', color=color_acc, linewidth=2, 
-                         markersize=6, label='Accuracy (Mean)', zorder=3)
-        
-        # Add shaded area (for single run, use small margin)
-        acc_min = [a - 0.01 for a in clean_acc]  # Small margin for visualization
+        line1 = ax1.plot(rounds, clean_acc, 'o-', color=color_acc, linewidth=2,
+                         markersize=6, label='Accuracy', zorder=3)
+        acc_min = [a - 0.01 for a in clean_acc]
         acc_max = [a + 0.01 for a in clean_acc]
-        ax1.fill_between(rounds, acc_min, acc_max, alpha=0.2, color=color_acc, 
-                        label='Accuracy Range (Min-Max)')
-        
+        ax1.fill_between(rounds, acc_min, acc_max, alpha=0.15, color=color_acc,
+                         label='Accuracy Range')
         ax1.tick_params(axis='y', labelcolor=color_acc)
-        ax1.set_ylim([0.75, 0.95])
+        ax1.set_ylim([max(0.0, min(clean_acc) - 0.05), min(1.0, max(clean_acc) + 0.05)])
         ax1.set_xlim([1, max(rounds) if rounds else 1])
         ax1.grid(True, alpha=0.3)
         
-        # Right Y-axis: Attack Success Rate
+        # Right Y-axis: rejection rate and |Δacc|
         ax2 = ax1.twinx()
-        color_asr = 'tab:red'
-        ax2.set_ylabel('Attack Success Rate (ASR)', color=color_asr, fontsize=12, fontweight='bold')
+        color_rej = 'tab:red'
+        color_delta = 'tab:orange'
+        ax2.set_ylabel('Rejection Rate / |Δacc|', color=color_rej, fontsize=12, fontweight='bold')
+        line2 = ax2.plot(rounds, rejection_rate, 's-', color=color_rej, linewidth=2,
+                         markersize=6, label='Rejection Rate', zorder=3)
+        line3 = ax2.plot(rounds, acc_diff, 'd--', color=color_delta, linewidth=2,
+                         markersize=5, label='|Δacc|', zorder=2)
+        ax2.tick_params(axis='y', labelcolor=color_rej)
+        ax2.set_ylim([0.0, max(0.01, max(rejection_rate + acc_diff)) * 1.2])
         
-        line2 = ax2.plot(rounds, asr, 's-', color=color_asr, linewidth=2, 
-                        markersize=6, label='ASR (Mean)', zorder=3)
-        
-        # Add shaded area for ASR
-        asr_min = [max(0, a - 0.05) for a in asr]
-        asr_max = [min(1, a + 0.05) for a in asr]
-        ax2.fill_between(rounds, asr_min, asr_max, alpha=0.2, color=color_asr,
-                        label='ASR Range (Min-Max)')
-        
-        ax2.tick_params(axis='y', labelcolor=color_asr)
-        ax2.set_ylim([0.0, 0.75])
-        
-        # Combine legends
-        lines = line1 + line2
+        lines = line1 + line2 + line3
         labels = [l.get_label() for l in lines]
         ax1.legend(lines, labels, loc='upper left', framealpha=0.9)
         
-        plt.title('Figure 3: Impact of GRMP Attack on Global Model Learning Accuracy and ASR', 
-                 fontsize=14, fontweight='bold', pad=20)
+        plt.title('Figure 3: Global Accuracy, Stability (|Δacc|) and Rejection Rate',
+                  fontsize=14, fontweight='bold', pad=20)
         plt.tight_layout()
         
-        if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"  ✅ Saved Figure 3 to: {save_path}")
-        else:
-            plt.savefig(self.results_dir / 'figure3_global_accuracy_asr.png', 
-                       dpi=300, bbox_inches='tight')
+        out_path = save_path or (self.results_dir / 'figure3_global_accuracy_stability.png')
+        plt.savefig(out_path, dpi=300, bbox_inches='tight')
+        print(f"  ✅ Saved Figure 3 to: {out_path}")
         plt.close()
     
     def plot_figure4_cosine_similarity(self, log_data: List[Dict], 
@@ -453,9 +437,9 @@ class ExperimentVisualizer:
                     # Create a copy to avoid modifying original data
                     server_log_data = server_log_data[:num_rounds]
         
-        # Figure 3: Global Accuracy and ASR (from attack experiment)
-        print("\n📊 Generating Figure 3: Global Accuracy and ASR...")
-        self.plot_figure3_global_accuracy_asr(
+        # Figure 3: Global Accuracy, Stability, Rejection Rate (from attack experiment)
+        print("\n📊 Generating Figure 3: Global Accuracy, Stability, Rejection Rate...")
+        self.plot_figure3_global_accuracy_stability(
             server_log_data,
             save_path=self.results_dir / f'{experiment_name}_figure3.png',
             num_rounds=num_rounds
