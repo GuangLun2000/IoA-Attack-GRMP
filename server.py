@@ -286,17 +286,7 @@ class Server:
         # Adaptive adjustment
         self.adaptive_adjustment(round_num)
 
-        # Display current stage
-        if round_num < 5:
-            stage = "🌱 Early Stage (Building trust)"
-        elif round_num < 10:
-            stage = "🌿 Growth Stage (Gradual enhancement)"
-        elif round_num < 15:
-            stage = "🌳 Mature Stage (Stable attacks)"
-        else:
-            stage = "🔥 Late Stage (Sustained pressure)"
-
-        print(f"Attack Stage: {stage}")
+        # Display current parameters (no hard-coded stage logic)
         print(f"Current Parameters: server_lr={self.server_lr:.2f}, tolerance={self.tolerance_factor:.1f}")
         print(f"{'=' * 60}")
 
@@ -388,7 +378,6 @@ class Server:
             'acc_diff': (abs(clean_acc - self.history['clean_acc'][-2])
                          if len(self.history['clean_acc']) > 1 else 0.0),
             'defense': defense_log,
-            'stage': stage,
             'server_lr': self.server_lr,
             'local_accuracies': local_accs_this_round  # Add local accuracies
         }

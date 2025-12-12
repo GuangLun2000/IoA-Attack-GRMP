@@ -304,17 +304,72 @@ class AttackerClient(Client):
 
     def local_train(self, epochs=None) -> torch.Tensor:
         """
-        Data-agnostic attacker (VGAE-MP): do NOT train on local/poisoned data.
-        Simply return a zero update; the real malicious update is generated later
-        in `camouflage_update` using benign updates + VGAE+GSP.
+        Enhanced attacker strategy: Use proxy data for understanding updates.
+        
+        Strategy: Attackers use clean proxy data (proxy_loader) to perform light training,
+        which helps them understand the update direction and magnitude. This "understanding update"
+        will be combined with VGAE+GSP generated attack in camouflage_update.
+        
+        This maintains data-agnostic nature (using clean proxy data, not attacker's local data)
+        while enabling more targeted and effective attacks.
         """
-        # We intentionally skip any local data training to align with the paper's
-        # data-agnostic assumption. Returning zero ensures the baseline update
-        # does not introduce unintended gradients; the attack is injected in
-        # the camouflage stage.
+        if epochs is None:
+            epochs = self.local_epochs
+        
+        # Use proxy_loader for understanding updates (clean data, not attacker's local data)
+        if self.proxy_loader is None or len(self.proxy_loader.dataset) == 0:
+            # Fallback: return zero update if no proxy data available
+            initial_params = self.model.get_flat_params().clone()
+            return torch.zeros_like(initial_params)
+        
+        # Perform light training on proxy data to understand update patterns
+        self.model.train()
         initial_params = self.model.get_flat_params().clone()
-        zero_update = torch.zeros_like(initial_params)
-        return zero_update
+        
+        # Use fewer epochs for understanding (not full training)
+        understanding_epochs = max(1, epochs // 2)  # Use half epochs for understanding
+        
+        # Proximal regularization coefficient (same as benign clients)
+        mu = self.alpha
+        
+        for epoch in range(understanding_epochs):
+            epoch_loss = 0
+            num_batches = 0
+            
+            for batch in self.proxy_loader:
+                input_ids = batch['input_ids'].to(self.device)
+                attention_mask = batch['attention_mask'].to(self.device)
+                labels = batch['labels'].to(self.device)
+                
+                outputs = self.model(input_ids, attention_mask)
+                logits = outputs
+                
+                ce_loss = nn.CrossEntropyLoss()(logits, labels)
+                
+                # Add proximal regularization term
+                current_params = self.model.get_flat_params()
+                proximal_term = mu * torch.norm(current_params - initial_params) ** 2
+                
+                loss = ce_loss + proximal_term
+                
+                self.optimizer.zero_grad()
+                loss.backward()
+                
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                
+                self.optimizer.step()
+                
+                epoch_loss += loss.item()
+                num_batches += 1
+                
+                # Limit batches for efficiency (understanding doesn't need full dataset)
+                if num_batches >= 5:  # Use only first 5 batches for understanding
+                    break
+        
+        # Get the understanding update (how model changes after training on proxy data)
+        understanding_update = self.get_model_update(initial_params)
+        
+        return understanding_update
 
     def _get_reduced_features(self, updates: List[torch.Tensor], fix_indices=True) -> torch.Tensor:
         """
@@ -337,30 +392,53 @@ class AttackerClient(Client):
         reduced_features = torch.index_select(stacked_updates, 1, self.feature_indices)
         return reduced_features
 
-    def _flat_to_param_dict(self, flat_params: torch.Tensor) -> Dict[str, torch.Tensor]:
-        """Convert flat tensor to param dict for stateless.functional_call."""
+    def _flat_to_param_dict(self, flat_params: torch.Tensor, skip_dim_check: bool = False) -> Dict[str, torch.Tensor]:
+        """
+        Convert flat tensor to param dict for stateless.functional_call.
+        
+        Args:
+            flat_params: Flattened parameter tensor
+            skip_dim_check: If True, skip dimension check (for performance in loops)
+        """
         param_dict = {}
         offset = 0
+        flat_params = flat_params.view(-1)  # Ensure 1D (O(1), just view change)
+        total_numel = flat_params.numel()
+        
         for name, param in self.model.named_parameters():
             numel = param.numel()
+            if not skip_dim_check and offset + numel > total_numel:
+                # Dimension mismatch: return empty dict to avoid errors
+                print(f"    [Attacker {self.client_id}] Param dict dimension mismatch at {name}: offset {offset} + numel {numel} > total {total_numel}")
+                return {}
             param_dict[name] = flat_params[offset:offset + numel].view_as(param)
             offset += numel
         return param_dict
 
-    def _proxy_global_loss(self, malicious_update: torch.Tensor, max_batches: int = 1) -> torch.Tensor:
+    def _proxy_global_loss(self, malicious_update: torch.Tensor, max_batches: int = 1, 
+                           skip_dim_check: bool = False) -> torch.Tensor:
         """
         Differentiable proxy for F(w'_g): cross-entropy on a small clean subset,
         using stateless.functional_call with (w_g + malicious_update).
+        
+        Args:
+            malicious_update: Update vector to evaluate
+            max_batches: Maximum number of batches to process
+            skip_dim_check: If True, skip dimension check (for performance in loops)
         """
         if self.global_model_params is None or self.proxy_loader is None:
             return torch.tensor(0.0, device=self.device)
 
-        # Ensure shapes match
-        if malicious_update.numel() != self._flat_numel:
-            malicious_update = malicious_update.view(-1)
+        # Ensure shapes match: flatten to 1D and check dimension
+        malicious_update = malicious_update.view(-1)  # Flatten to 1D (O(1), just view change)
+        if not skip_dim_check and malicious_update.numel() != self._flat_numel:
+            # Dimension mismatch: return zero loss to avoid errors
+            print(f"    [Attacker {self.client_id}] Proxy loss dimension mismatch: got {malicious_update.numel()}, expected {self._flat_numel}")
+            return torch.tensor(0.0, device=self.device)
 
         candidate_params = self.global_model_params + malicious_update
-        param_dict = self._flat_to_param_dict(candidate_params)
+        # Skip dimension check if already validated (performance optimization)
+        param_dict = self._flat_to_param_dict(candidate_params, skip_dim_check=skip_dim_check)
 
         total_loss = 0.0
         batches = 0
@@ -540,14 +618,16 @@ class AttackerClient(Client):
         7. w'_j(t) selected from F̂           (Malicious model)
         
         Args:
-            feature_matrix: F ∈ R^{I×M} - benign model features
+            feature_matrix: F ∈ R^{I×M} - benign model features (reduced dimension)
             adj_orig: A ∈ R^{M×M} - original adjacency matrix
             adj_recon: Â ∈ R^{M×M} - reconstructed adjacency matrix from VGAE
-            poisoned_update: The poisoned update from local training
+            poisoned_update: The poisoned update from local training (full dimension, for fallback only)
             
         Returns:
-            Malicious update generated using GSP
+            Malicious update generated using GSP (reduced dimension M, or None if failed)
         """
+        M = feature_matrix.shape[1]  # Reduced dimension
+        
         # Step 1: Compute Laplacian of original graph
         # L = diag(A·1) - A
         degree_orig = adj_orig.sum(dim=1)
@@ -558,10 +638,10 @@ class AttackerClient(Client):
         try:
             U_orig, S_orig, Vh_orig = torch.linalg.svd(L_orig, full_matrices=True)
             B_orig = U_orig  # GFT basis (M, M)
-        except:
-            # Fallback if SVD fails
-            print(f"    [Attacker {self.client_id}] SVD failed, using fallback")
-            return poisoned_update
+        except Exception as e:
+            # Fallback if SVD fails: return zeros in reduced dimension
+            print(f"    [Attacker {self.client_id}] SVD failed: {e}, using zero fallback")
+            return torch.zeros(M, device=feature_matrix.device, dtype=feature_matrix.dtype)
         
         # Step 3: Compute GFT coefficient matrix
         # S = F · B where F ∈ R^{I×M}, B ∈ R^{M×M}
@@ -576,9 +656,10 @@ class AttackerClient(Client):
         try:
             U_recon, S_recon, Vh_recon = torch.linalg.svd(L_recon, full_matrices=True)
             B_recon = U_recon  # New GFT basis (M, M)
-        except:
-            print(f"    [Attacker {self.client_id}] SVD of recon failed, using fallback")
-            return poisoned_update
+        except Exception as e:
+            # Fallback if SVD fails: return zeros in reduced dimension
+            print(f"    [Attacker {self.client_id}] SVD of recon failed: {e}, using zero fallback")
+            return torch.zeros(M, device=feature_matrix.device, dtype=feature_matrix.dtype)
         
         # Step 6: Generate reconstructed feature matrix
         # F̂ = S · B̂^T where S ∈ R^{I×M}, B̂ ∈ R^{M×M}
@@ -603,19 +684,31 @@ class AttackerClient(Client):
         rng = torch.Generator(device=self.device)
         rng.manual_seed(self.client_id * 1000 + 42)
         # Positive scale range: 0.1 to 0.3 (ensures attack direction, not just noise)
-        random_scale = torch.empty(1, device=self.device, generator=rng).uniform_(0.1, 0.3).item()
+        # Use torch.rand() with generator, then scale to [0.1, 0.3)
+        random_scale = (torch.rand(1, device=self.device, generator=rng) * 0.2 + 0.1).item()
         gsp_attack = malicious_direction * random_scale
         
         return gsp_attack
 
     def camouflage_update(self, poisoned_update: torch.Tensor) -> torch.Tensor:
         """
-        GRMP Attack using VGAE + GSP according to the paper (Section III).
+        Enhanced GRMP Attack using VGAE + GSP + Understanding Update.
         
-        Paper Algorithm 1:
+        Enhanced Strategy:
+        1. Understanding Update: Attacker performs light training on proxy data to understand
+           update patterns (from local_train, now returns understanding_update instead of zero)
+        2. VGAE + GSP Attack: Generate structured attack using graph-based approach
+        3. Combination: Combine understanding update (40%) with GSP attack (60%) for enhanced
+           effectiveness while maintaining stealth
+        
+        Paper Algorithm 1 (Base):
         1. Calculate A according to cosine similarity (eq. 8)
         2. Train VGAE to maximize L_loss (eq. 12), obtain optimal Â
         3. Use GSP module to obtain F̂, determine w'_j(t) based on F̂
+        
+        Enhancement: The understanding_update (from proxy data training) provides learned
+        update patterns, which are combined with GSP-generated attack for more targeted
+        and effective poisoning while maintaining data-agnostic nature.
         """
         if not self.benign_updates:
             print(f"    [Attacker {self.client_id}] No benign updates, using raw poisoned update")
@@ -660,20 +753,93 @@ class AttackerClient(Client):
         )
         
         # ============================================================
-        # STEP 5: Use GSP attack as the malicious update (data-agnostic)
+        # STEP 5: Combine understanding update with GSP attack for enhanced effectiveness
         # Expand GSP attack back to full dimension; non-selected dims remain zero.
+        # Then combine with understanding_update (poisoned_update) to leverage learned patterns
         malicious_update = torch.zeros_like(poisoned_update)
+        total_dim = malicious_update.shape[0]
+        
         if gsp_attack_reduced is not None:
+            gsp_dim = gsp_attack_reduced.shape[0]
+            
             if self.feature_indices is not None:
-                # Dimension reduction was applied, expand back to full dimension
-                malicious_update[self.feature_indices] = gsp_attack_reduced
+                # Dimension reduction was applied
+                expected_dim = len(self.feature_indices)
+                if gsp_dim == expected_dim:
+                    # Correct dimension: expand back to full dimension
+                    malicious_update[self.feature_indices] = gsp_attack_reduced
+                else:
+                    # Dimension mismatch: log warning and use zeros
+                    print(f"    [Attacker {self.client_id}] GSP dimension mismatch: got {gsp_dim}, expected {expected_dim}, using zeros")
             else:
-                # No dimension reduction, use GSP attack directly
-                if gsp_attack_reduced.shape[0] == malicious_update.shape[0]:
+                # No dimension reduction: GSP attack should be full dimension
+                if gsp_dim == total_dim:
+                    # Correct dimension: use directly
                     malicious_update = gsp_attack_reduced
                 else:
-                    # Fallback: use zeros if dimension mismatch
-                    print(f"    [Attacker {self.client_id}] Dimension mismatch in GSP attack, using zeros")
+                    # Dimension mismatch: log warning and use zeros
+                    print(f"    [Attacker {self.client_id}] GSP dimension mismatch: got {gsp_dim}, expected {total_dim}, using zeros")
+        else:
+            # GSP attack is None: malicious_update remains zeros
+            print(f"    [Attacker {self.client_id}] GSP attack is None, using zeros")
+        
+        # Enhanced strategy: Use understanding update to GUIDE attack, not directly mix
+        # The understanding_update (poisoned_update) is a "correct" update that improves performance.
+        # We use it to understand update patterns, then guide GSP attack to be more effective.
+        understanding_update = poisoned_update  # This is now the understanding update from local_train
+        
+        # Ensure dimension matching
+        if understanding_update.shape[0] != malicious_update.shape[0]:
+            print(f"    [Attacker {self.client_id}] Dimension mismatch: understanding_update {understanding_update.shape[0]} vs malicious_update {malicious_update.shape[0]}")
+            # If mismatch, use malicious_update only (skip understanding guidance)
+            understanding_update = torch.zeros_like(malicious_update)
+        
+        understanding_norm = torch.norm(understanding_update)
+        gsp_norm = torch.norm(malicious_update)
+        
+        if understanding_norm > 1e-8 and gsp_norm > 1e-8:
+            # Strategy: Use understanding update to guide attack, not weaken it
+            # 1. Use understanding update's NORM for stealth (match the magnitude)
+            # 2. Use understanding update's DIRECTION to guide attack (deviate from it for attack)
+            
+            # Get directions
+            understanding_direction = understanding_update / understanding_norm
+            gsp_direction = malicious_update / gsp_norm
+            
+            # Compute how much GSP attack deviates from understanding direction
+            # Negative cosine similarity means opposite direction (good for attack)
+            cosine_sim = torch.cosine_similarity(
+                gsp_direction.unsqueeze(0),
+                understanding_direction.unsqueeze(0)
+            ).item()
+            
+            # If GSP attack is too similar to understanding (both improve performance), enhance deviation
+            if cosine_sim > 0.3:  # Too similar, need more deviation
+                # Create deviation component: perpendicular to understanding direction
+                # Project GSP direction onto understanding direction
+                projection = torch.dot(gsp_direction, understanding_direction) * understanding_direction
+                perpendicular = gsp_direction - projection
+                
+                # Enhance perpendicular component (deviation from correct direction)
+                if torch.norm(perpendicular) > 1e-8:
+                    perpendicular = perpendicular / torch.norm(perpendicular)
+                    # Add deviation to make attack more effective
+                    deviation_component = perpendicular * understanding_norm * 0.4
+                    malicious_update = malicious_update + deviation_component
+            
+            # Match norm to understanding update for stealth (but allow slight increase for attack)
+            current_norm = torch.norm(malicious_update)
+            if current_norm > 1e-8:
+                # Scale to understanding norm (stealth) with slight increase (attack)
+                target_norm = understanding_norm * 1.15  # 15% larger for attack, but close for stealth
+                scale_factor = target_norm / current_norm
+                scale_factor = torch.clamp(torch.tensor(scale_factor), 0.8, 1.3)  # Limit scaling
+                malicious_update = malicious_update * scale_factor.item()
+        elif understanding_norm > 1e-8:
+            # If GSP attack is zero/empty, use understanding update's norm but invert direction
+            # This creates an attack that has similar magnitude (stealth) but opposite direction (attack)
+            malicious_update = -understanding_update * 0.9  # Invert and slightly scale down
+        # else: malicious_update remains as GSP attack (or zeros if both are empty)
         
         # ============================================================
         # STEP 6: Lagrangian-style objective & dual updates (approximation)
@@ -691,13 +857,15 @@ class AttackerClient(Client):
         if self.global_model_params is not None and self.proxy_loader is not None:
             # Compute gradient of proxy loss w.r.t. malicious_update to get attack direction
             temp_param = malicious_update.clone().detach().requires_grad_(True)
-            proxy_loss = self._proxy_global_loss(temp_param, max_batches=1)
-            if proxy_loss.requires_grad:
-                proxy_loss.backward()
-                attack_direction = temp_param.grad
-                # Normalize to unit direction
-                if attack_direction is not None and torch.norm(attack_direction) > 1e-8:
-                    attack_direction = attack_direction / torch.norm(attack_direction)
+            # Check dimension once before loop
+            if temp_param.view(-1).numel() == self._flat_numel:
+                proxy_loss = self._proxy_global_loss(temp_param, max_batches=1, skip_dim_check=True)
+                if proxy_loss.requires_grad:
+                    proxy_loss.backward()
+                    attack_direction = temp_param.grad
+                    # Normalize to unit direction
+                    if attack_direction is not None and torch.norm(attack_direction) > 1e-8:
+                        attack_direction = attack_direction / torch.norm(attack_direction)
         
         # If attack direction available, bias malicious_update towards it
         if attack_direction is not None:
@@ -708,15 +876,37 @@ class AttackerClient(Client):
         
         attack_obj = torch.norm(malicious_update - benign_mean_full)
         
-        # Constraint (4b)
+        # Constraint (4b): d(w'_j, w'_g) ≤ d_T
+        # FIX: Use distance from global model, not just norm of update
         constraint_b = torch.tensor(0.0, device=self.device)
-        if self.d_T is not None:
+        if self.d_T is not None and self.global_model_params is not None:
+            # Compute malicious model: w'_j = w_g + malicious_update
+            malicious_model = self.global_model_params + malicious_update
+            # Distance from global model: ||w'_j - w'_g|| = ||malicious_update||
+            # But we should use the actual distance, which is the norm of the update
+            # However, the constraint in the paper is about the update itself
+            # So we use: ||w'_j - w'_g|| = ||malicious_update|| ≤ d_T
+            dist_global = torch.norm(malicious_update)
+            constraint_b = F.relu(dist_global - self.d_T)
+        elif self.d_T is not None:
+            # Fallback: use norm if global_model_params not available
             dist_global = torch.norm(malicious_update)
             constraint_b = F.relu(dist_global - self.d_T)
         
-        # Constraint (4c)
+        # Constraint (4c): Σ β_i d(w_i, w̄_i) ≤ γ
+        # FIX: Use all benign updates, not just selected subset
         constraint_c = torch.tensor(0.0, device=self.device)
-        if self.gamma is not None and len(selected_benign) > 0:
+        if self.gamma is not None and len(self.benign_updates) > 0:
+            # Use all benign updates for accurate constraint calculation
+            all_benign_stack = torch.stack([u.detach() for u in self.benign_updates])
+            benign_mean_all = all_benign_stack.mean(dim=0)
+            # Compute distances from mean for all benign updates
+            distances = torch.norm(all_benign_stack - benign_mean_all, dim=1)
+            # Sum of distances (aggregation distance)
+            agg_dist = distances.sum()
+            constraint_c = F.relu(agg_dist - self.gamma)
+        elif self.gamma is not None and len(selected_benign) > 0:
+            # Fallback: use selected subset if no benign_updates available
             sel_stack = torch.stack(selected_benign)
             sel_mean = sel_stack.mean(dim=0)
             distances = torch.norm(sel_stack - sel_mean, dim=1)
@@ -749,18 +939,33 @@ class AttackerClient(Client):
         # Store initial norm to preserve attack direction after optimization
         initial_norm = torch.norm(proxy_param).item()
         
+        # Check dimension once before loop (performance optimization)
+        proxy_param_flat = proxy_param.view(-1)
+        dim_valid = proxy_param_flat.numel() == self._flat_numel
+        
         for step in range(proxy_steps):
             proxy_opt.zero_grad()
             # Proxy objective: maximize F(w'_g) via CE loss on clean subset, minus penalties
-            proxy_obj = self._proxy_global_loss(proxy_param, max_batches=1)
+            # Skip dimension check in loop for performance (already checked above)
+            proxy_obj = self._proxy_global_loss(proxy_param, max_batches=1, skip_dim_check=dim_valid)
             proxy_penalty = torch.tensor(0.0, device=self.device)
             
             # Soft constraints: use squared penalty to allow some violation for stronger attack
             if self.d_T is not None:
                 # Soft constraint: allow slight violation (up to 1.2 * d_T) for stronger attack
+                # Use norm of update (distance from global model)
                 soft_d_T = self.d_T * 1.2
                 proxy_penalty = proxy_penalty + 0.1 * F.relu(torch.norm(proxy_param) - soft_d_T) ** 2
-            if self.gamma is not None and len(selected_benign) > 0:
+            if self.gamma is not None and len(self.benign_updates) > 0:
+                # Use all benign updates for accurate constraint calculation
+                all_benign_stack = torch.stack([u.detach() for u in self.benign_updates])
+                benign_mean_all = all_benign_stack.mean(dim=0)
+                distances = torch.norm(all_benign_stack - benign_mean_all, dim=1)
+                agg_dist = distances.sum()
+                soft_gamma = self.gamma * 1.2
+                proxy_penalty = proxy_penalty + 0.1 * F.relu(agg_dist - soft_gamma) ** 2
+            elif self.gamma is not None and len(selected_benign) > 0:
+                # Fallback: use selected subset if no benign_updates available
                 sel_stack = torch.stack(selected_benign)
                 sel_mean = sel_stack.mean(dim=0)
                 distances = torch.norm(sel_stack - sel_mean, dim=1)
@@ -785,7 +990,9 @@ class AttackerClient(Client):
         # Calculate target norm: allow larger deviation from benign mean for stronger attack
         benign_mean_norm = benign_norms.mean().item()
         benign_std_norm = benign_norms.std().item()
-        # Increase allowed deviation: from 0.1 to 0.5 std (stronger attack)
+        
+        # Use consistent strategy across all rounds (no hard-coded round-based logic)
+        # Allow moderate deviation from benign mean for effective attack while maintaining stealth
         target_norm = benign_mean_norm + 0.5 * benign_std_norm
         
         # If d_T is set, use it as upper bound but allow larger norm if beneficial
