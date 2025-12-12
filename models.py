@@ -5,23 +5,23 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import DistilBertForSequenceClassification
+from transformers import AutoModelForSequenceClassification
 from typing import Tuple
 
 # --- Constants ---
-DISTILBERT_MODEL_NAME = 'distilbert-base-uncased'
+MODEL_NAME = 'google/mobilebert-uncased'
 NUM_LABELS = 4
 
 
 class NewsClassifierModel(nn.Module):
     """
-    DistilBERT-based model for 4-class news classification.
-    Wraps the Hugging Face DistilBertForSequenceClassification model.
+    MobileBERT-based model for 4-class news classification.
+    Wraps the Hugging Face AutoModelForSequenceClassification.
     """
 
-    def __init__(self, model_name: str = DISTILBERT_MODEL_NAME, num_labels: int = NUM_LABELS):
+    def __init__(self, model_name: str = MODEL_NAME, num_labels: int = NUM_LABELS):
         super().__init__()
-        self.model = DistilBertForSequenceClassification.from_pretrained(
+        self.model = AutoModelForSequenceClassification.from_pretrained(
             model_name,
             num_labels=num_labels
         )
@@ -56,7 +56,6 @@ class NewsClassifierModel(nn.Module):
         offset = 0
         for param in self.parameters():
             numel = param.numel()
-            # Copy data from flat_params to param.data
             param.data.copy_(
                 flat_params[offset:offset + numel].view(param.shape)
             )

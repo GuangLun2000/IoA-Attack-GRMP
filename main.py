@@ -45,11 +45,11 @@ def setup_experiment(config):
     data_manager = DataManager(
         num_clients=config['num_clients'],
         num_attackers=config['num_attackers'],
-        test_sample_rate=config.get('test_sample_rate', 1.0),  # 1.0 = test all Business samples
-        test_seed=config.get('seed', 42),  # Use same seed for reproducibility
-        dataset_size_limit=config.get('dataset_size_limit', None),  # None = full dataset (per paper)
-        batch_size=config['batch_size'],  # Batch size for training data loaders
-        test_batch_size=config.get('test_batch_size')  # Batch size for test data loaders
+        test_sample_rate=config['test_sample_rate'],
+        test_seed=config['seed'],
+        dataset_size_limit=config['dataset_size_limit'],
+        batch_size=config['batch_size'],
+        test_batch_size=config['test_batch_size']
     )
 
     # 2. Partition data among clients (Non-IID distribution per paper)
@@ -63,7 +63,7 @@ def setup_experiment(config):
     
     # Non-IID distribution: Use Dirichlet distribution to create heterogeneous data
     # Each client gets data with different label distributions
-    dirichlet_alpha = config.get('dirichlet_alpha', 0.5)  # Lower alpha = more heterogeneous
+    dirichlet_alpha = config['dirichlet_alpha']
     num_labels = 4
     client_indices = {i: [] for i in range(config['num_clients'])}
     
@@ -120,11 +120,11 @@ def setup_experiment(config):
         attack_test_loader=attack_test_loader,
         defense_threshold=config['defense_threshold'],
         total_rounds=config['num_rounds'],
-        server_lr=config.get('server_lr', 1.0),
-        tolerance_factor=config.get('tolerance_factor', 2.0),
-        d_T=config.get('d_T', 0.5),
-        gamma=config.get('gamma', 10.0),
-        similarity_alpha=config.get('similarity_alpha', 0.7)
+        server_lr=config['server_lr'],
+        tolerance_factor=config['tolerance_factor'],
+        d_T=config['d_T'],
+        gamma=config['gamma'],
+        similarity_alpha=config['similarity_alpha']
     )
 
     # 6. Create Clients
@@ -150,12 +150,17 @@ def setup_experiment(config):
                 data_loader=client_loader,
                 lr=config['client_lr'],
                 local_epochs=config['local_epochs'],
-                alpha=config.get('alpha', 0.01),
+                alpha=config['alpha'],
                 data_indices=client_indices[client_id]
             )
         else:
             # --- Attacker Client ---
             print(f"  Client {client_id}: ATTACKER (VGAE Enabled)")
+            # Per paper: Attacker can freely set D'_j(t) (claimed_data_size) for weighted aggregation
+            # No restrictions in the paper - attacker can set any value to increase their weight
+            claimed_data_size = config['attacker_claimed_data_size']
+            print(f"    Claimed data size D'_j(t): {claimed_data_size}")
+            
             client = AttackerClient(
                 client_id=client_id,
                 model=global_model,
@@ -163,23 +168,23 @@ def setup_experiment(config):
                 data_indices=client_indices[client_id],
                 lr=config['client_lr'],
                 local_epochs=config['local_epochs'],
-                alpha=config.get('alpha', 0.01),
-                dim_reduction_size=config.get('dim_reduction_size', 10000),
-                vgae_lambda=config.get('vgae_lambda', 0.5),
-                vgae_epochs=config.get('vgae_epochs', 20),
-                vgae_lr=config.get('vgae_lr', 0.01),
-                camouflage_steps=config.get('camouflage_steps', 30),
-                camouflage_lr=config.get('camouflage_lr', 0.1),
-                lambda_proximity=config.get('lambda_proximity', 1.0),
-                lambda_aggregation=config.get('lambda_aggregation', 0.5),
-                graph_threshold=config.get('graph_threshold', 0.5),
-                attack_start_round=config.get('attack_start_round'),
-                lambda_attack=config.get('lambda_attack', 2.0),
-                lambda_camouflage=config.get('lambda_camouflage', 0.3),
-                benign_select_ratio=config.get('benign_select_ratio', 1.0),
-                dual_lr=config.get('dual_lr', 0.01),
-                proxy_step=config.get('proxy_step', 0.1),
-                claimed_data_size=config.get('attacker_claimed_data_size', 1.0)
+                alpha=config['alpha'],
+                dim_reduction_size=config['dim_reduction_size'],
+                vgae_lambda=config['vgae_lambda'],
+                vgae_epochs=config['vgae_epochs'],
+                vgae_lr=config['vgae_lr'],
+                camouflage_steps=config['camouflage_steps'],
+                camouflage_lr=config['camouflage_lr'],
+                lambda_proximity=config['lambda_proximity'],
+                lambda_aggregation=config['lambda_aggregation'],
+                graph_threshold=config['graph_threshold'],
+                attack_start_round=config['attack_start_round'],
+                lambda_attack=config['lambda_attack'],
+                lambda_camouflage=config['lambda_camouflage'],
+                benign_select_ratio=config['benign_select_ratio'],
+                dual_lr=config['dual_lr'],
+                proxy_step=config['proxy_step'],
+                claimed_data_size=claimed_data_size
             )
 
         server.register_client(client)
@@ -276,8 +281,8 @@ def run_experiment(config):
             attacker_ids=attacker_ids,
             experiment_name=config['experiment_name'],
             baseline_local_accuracies=baseline_local_accs,
-            num_rounds=config.get('num_rounds'),  # Pass num_rounds to ensure alignment
-            attack_start_round=config.get('attack_start_round')  # Pass attack_start_round for Figure 5
+            num_rounds=config['num_rounds'],
+            attack_start_round=config['attack_start_round']
         )
     
     return server.log_data, progressive_metrics
@@ -337,7 +342,7 @@ def main():
         
         # ========== Training Hyperparameters ==========
         'client_lr': 2e-5,  # Learning rate for local client training (float)
-        'server_lr': 0.8,  # Server learning rate for model aggregation (float, typically 0.5-1.0)
+        'server_lr': 1.0,  # Server learning rate for model aggregation (fixed at 1.0)
         'batch_size': 128,  # Batch size for local training (int)
         'test_batch_size': 128,  # Batch size for test/validation data loaders (int)
         
@@ -346,8 +351,8 @@ def main():
         'alpha': 0.01,  # Proximal regularization coefficient α ∈ [0,1] from paper formula (1) (float)
         
         # ========== Data Distribution ==========
-        'dirichlet_alpha': 1.0,  # Make data less extreme non-IID (higher alpha = more balanced)
-        'test_sample_rate': 1.0,  # Rate of Business samples to test for ASR evaluation (float, 1.0 = all samples)
+        'dirichlet_alpha': 0.6,  # Make data less extreme non-IID (higher alpha = more balanced)
+        'test_sample_rate': 0.0,  # Disable ASR evaluation by using empty attack test loader
         # 'dataset_size_limit': None,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
         'dataset_size_limit': 10000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
 
@@ -355,8 +360,8 @@ def main():
         'attack_start_round': 0,  # Round when attack phase starts (int, now all rounds use complete poisoning)
         
         # ========== Formula 4 Constraint Parameters ==========
-        'd_T': 1.0,  # Distance threshold for constraint (4b): d(w'_j(t), w_g(t)) ≤ d_T (float)
-        'gamma': 10.0,  # Upper bound for constraint (4c): Σ β'_{i,j}(t) d(w_i(t), w̄_i(t)) ≤ Γ (float)
+        'd_T': 0.6,  # Tighter proximity for camouflage (closer to global)
+        'gamma': 5.0,  # Tighter aggregation distance budget
         
         # ========== VGAE Training Parameters ==========
         # Reference paper: input_dim=5, hidden1_dim=32, hidden2_dim=16, num_epoch=10, lr=0.01
@@ -368,14 +373,14 @@ def main():
         # ========== Camouflage Optimization Parameters ==========
         'camouflage_steps': 50,  # Number of optimization steps for malicious update camouflage (int)
         'camouflage_lr': 0.1,  # Learning rate for camouflage optimization (float)
-        'lambda_proximity': 0.5,  # Weight for constraint (4b) proximity loss in camouflage (float)
-        'lambda_aggregation': 0.5,  # Weight for constraint (4c) aggregation loss in camouflage (float)
-        'lambda_attack': 1.0,  # Stronger attack objective weight
-        'lambda_camouflage': 0.05,  # Lighter camouflage to preserve attack effect
+        'lambda_proximity': 1.0,  # Stronger pull toward global for stealth
+        'lambda_aggregation': 1.0,  # Stronger aggregation-distance constraint
+        'lambda_attack': 1.0,  # Softer attack objective to reduce drift
+        'lambda_camouflage': 0.2,  # Stronger camouflage to mimic benign
         'benign_select_ratio': 1.0,  # β subset ratio for attacker graph (data-agnostic attack)
         'dual_lr': 0.01,  # Step size for dual variable updates (λ, ρ) in Lagrangian
         'proxy_step': 0.1,  # Step size for gradient-free ascent toward global-loss proxy
-        'attacker_claimed_data_size': 3.0,  # Amplify attacker weight in aggregation
+        'attacker_claimed_data_size': 1.5,  # Keep claimed size equal to benign to reduce detectability
         
         # ========== Graph Construction Parameters ==========
         'graph_threshold': 0.5,  # Threshold for graph adjacency matrix binarization in VGAE (float, 0.0-1.0)

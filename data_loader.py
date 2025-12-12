@@ -6,7 +6,7 @@
 import torch
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
-from transformers import DistilBertTokenizer
+from transformers import AutoTokenizer
 import pandas as pd
 import urllib.request
 import io
@@ -90,7 +90,7 @@ class DataManager:
         self.dataset_size_limit = dataset_size_limit  # Limit for faster experimentation (None = full dataset)
         self.batch_size = batch_size  # Batch size for training data loaders
         self.test_batch_size = test_batch_size  # Batch size for test data loaders
-        self.tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
+        self.tokenizer = AutoTokenizer.from_pretrained('google/mobilebert-uncased')
 
         print("Loading AG News dataset...")
         self._load_data()
@@ -217,6 +217,10 @@ class DataManager:
         
         This uses random sampling instead of keyword filtering to ensure unbiased evaluation.
         """
+        # If disabled, return empty loader
+        if self.test_sample_rate is None or self.test_sample_rate <= 0:
+            return DataLoader(NewsDataset([], [], self.tokenizer), batch_size=self.test_batch_size)
+
         attack_texts = []
         attack_labels = []
 

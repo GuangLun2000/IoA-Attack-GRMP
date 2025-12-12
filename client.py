@@ -548,8 +548,8 @@ class AttackerClient(Client):
         # Following reference code: w_attack = sum(new_features) / n * random_noise
         malicious_direction = F_recon.mean(dim=0)  # (M,)
         
-        # Scale by random factor (similar to reference code)
-        random_scale = torch.empty(1, device=self.device).uniform_(-0.5, 0.1).item()
+        # Scale by random factor (tighter range to stay stealthy)
+        random_scale = torch.empty(1, device=self.device).uniform_(-0.2, 0.05).item()
         gsp_attack = malicious_direction * random_scale
         
         return gsp_attack
@@ -609,8 +609,17 @@ class AttackerClient(Client):
         # STEP 5: Use GSP attack as the malicious update (data-agnostic)
         # Expand GSP attack back to full dimension; non-selected dims remain zero.
         malicious_update = torch.zeros_like(poisoned_update)
-        if self.feature_indices is not None and gsp_attack_reduced is not None:
-            malicious_update[self.feature_indices] = gsp_attack_reduced
+        if gsp_attack_reduced is not None:
+            if self.feature_indices is not None:
+                # Dimension reduction was applied, expand back to full dimension
+                malicious_update[self.feature_indices] = gsp_attack_reduced
+            else:
+                # No dimension reduction, use GSP attack directly
+                if gsp_attack_reduced.shape[0] == malicious_update.shape[0]:
+                    malicious_update = gsp_attack_reduced
+                else:
+                    # Fallback: use zeros if dimension mismatch
+                    print(f"    [Attacker {self.client_id}] Dimension mismatch in GSP attack, using zeros")
         
         # ============================================================
         # STEP 6: Lagrangian-style objective & dual updates (approximation)
@@ -653,7 +662,7 @@ class AttackerClient(Client):
         # ============================================================
         # STEP 7: Proxy ascent toward global loss (gradient-based on proxy norm)
         # Use a small optimizer on malicious_update to maximize its norm while respecting constraints
-        proxy_steps = 5
+        proxy_steps = 3
         proxy_lr = self.proxy_step
         proxy_param = malicious_update.clone().detach().to(self.device)
         proxy_param.requires_grad_(True)
@@ -679,7 +688,7 @@ class AttackerClient(Client):
         
         # STEP 8: Apply norm matching + (4b) clipping for camouflage
         # ============================================================
-        target_norm = benign_norms.mean() + 0.3 * benign_norms.std()
+        target_norm = benign_norms.mean() + 0.1 * benign_norms.std()
         # If d_T is set, cap the desired norm to d_T to approximate constraint (4b)
         if self.d_T is not None:
             target_norm = min(target_norm, self.d_T)

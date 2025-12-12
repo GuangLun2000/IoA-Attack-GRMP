@@ -245,12 +245,11 @@ class Server:
 
         clean_accuracy = correct / total if total > 0 else 0
 
-        # Evaluate Attack Success Rate (ASR)
-        # Per paper Section IV: ASR = proportion of Business+keywords samples misclassified as Sports
-        attack_success = 0
-        attack_total = 0
-
+        # Evaluate Attack Success Rate (ASR) if loader available
+        attack_success_rate = 0
         if self.attack_test_loader:
+            attack_success = 0
+            attack_total = 0
             with torch.no_grad():
                 for batch in self.attack_test_loader:
                     input_ids = batch['input_ids'].to(self.device)
@@ -260,13 +259,9 @@ class Server:
                     outputs = self.global_model(input_ids, attention_mask)
                     predictions = torch.argmax(outputs, dim=1)
                     
-                    # ASR: Check if Business samples are misclassified as Sports
-                    # Attack succeeds if prediction == TARGET_LABEL (Sports)
-                    # Note: true_labels are Business (2), but we check if predicted as Sports (1)
                     attack_success += (predictions == TARGET_LABEL).sum().item()
                     attack_total += len(predictions)
-
-        attack_success_rate = attack_success / attack_total if attack_total > 0 else 0
+            attack_success_rate = attack_success / attack_total if attack_total > 0 else 0
 
         # Record historical metrics
         self.history['asr'].append(attack_success_rate)
@@ -283,12 +278,7 @@ class Server:
         asr_change = self.history['asr'][-1] - self.history['asr'][-2]
         
         # Adjust server learning rate if ASR fluctuations are too high
-        if abs(asr_change) > 0.40:  # Fluctuation exceeds 40%
-            self.server_lr = max(0.5, self.server_lr * 0.9)  # Reduce learning rate
-            print(f"  🔄 Large fluctuation detected. Lowering server learning rate to: {self.server_lr:.2f}")
-        elif abs(asr_change) < 0.05 and round_num > 5:  # If stable, increase learning rate
-            self.server_lr = min(0.95, self.server_lr * 1.1)
-            print(f"  🔄 System stable. Increasing server learning rate to: {self.server_lr:.2f}")
+        # Fixed server_lr (no adaptive change)
 
     def run_round(self, round_num: int) -> Dict:
         """Execute one round of federated learning - stable version."""
@@ -410,6 +400,14 @@ class Server:
         # Display results
         print(f"\n📊 Round {round_num + 1} Results:")
         print(f"  Clean Accuracy: {clean_acc:.4f}")
+        # Show performance change
+        if len(self.history['clean_acc']) > 1:
+            prev_clean = self.history['clean_acc'][-2]
+            delta_prev = clean_acc - prev_clean
+            best_clean = max(self.history['clean_acc'])
+            delta_best = clean_acc - best_clean
+            print(f"  ΔClean vs prev: {delta_prev:+.4f}")
+            print(f"  ΔClean vs best: {delta_best:+.4f}")
         print(f"  Attack Success Rate: {attack_asr:.4f}")
 
         # Analyze ASR changes
