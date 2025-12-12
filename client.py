@@ -233,6 +233,8 @@ class AttackerClient(Client):
         Select a subset of benign updates (β selection) to build the graph,
         approximating the 0-1 knapsack in the paper. We use a simple heuristic:
         pick the farthest updates from the mean until ratio or gamma budget is met.
+        
+        Different attackers select different subsets to ensure diversity in attack strategies.
         """
         if not self.benign_updates:
             return []
@@ -240,8 +242,41 @@ class AttackerClient(Client):
         benign_stack = torch.stack(self.benign_updates)
         benign_mean = benign_stack.mean(dim=0)
         distances = torch.norm(benign_stack - benign_mean, dim=1)
-        # Sort by distance descending
-        sorted_idx = torch.argsort(distances, descending=True)
+        
+        # Use client_id to introduce diversity: different attackers use different selection strategies
+        # Strategy 0: Select farthest from mean (original strategy)
+        # Strategy 1: Select closest to mean
+        # Strategy 2: Select medium distance
+        # Strategy 3: Random selection with distance weighting
+        strategy = self.client_id % 4
+        
+        if strategy == 0:
+            # Original: Sort by distance descending (farthest first)
+            sorted_idx = torch.argsort(distances, descending=True)
+        elif strategy == 1:
+            # Select closest to mean (different perspective)
+            sorted_idx = torch.argsort(distances, descending=False)
+        elif strategy == 2:
+            # Select medium distance: sort by absolute deviation from median distance
+            median_dist = torch.median(distances)
+            deviations = torch.abs(distances - median_dist)
+            sorted_idx = torch.argsort(deviations, descending=False)
+        else:  # strategy == 3
+            # Random selection with distance weighting: shuffle but prefer diverse updates
+            # Use client_id as seed for reproducibility but different per attacker
+            rng = torch.Generator(device=self.device)
+            rng.manual_seed(self.client_id * 1000 + 42)
+            # Create weighted probabilities: prefer updates with different distances
+            # Normalize distances to [0, 1] range for weighting
+            normalized_dist = (distances - distances.min()) / (distances.max() - distances.min() + 1e-8)
+            # Mix distance-based and random selection
+            weights = 0.5 * normalized_dist + 0.5 * torch.ones_like(normalized_dist)
+            probs = weights / weights.sum()
+            # Sample indices based on weighted probabilities
+            sampled_indices = torch.multinomial(probs, num_samples=min(target_k * 2, len(self.benign_updates)), 
+                                               replacement=False, generator=rng)
+            sorted_idx = sampled_indices[torch.argsort(distances[sampled_indices], descending=True)]
+        
         selected = []
         total_dist = 0.0
         for idx in sorted_idx:
@@ -253,9 +288,18 @@ class AttackerClient(Client):
                 continue
             selected.append(self.benign_updates[idx])
             total_dist += d
+        
         if not selected:
-            # Fallback: take the farthest one
-            selected = [self.benign_updates[sorted_idx[0]]]
+            # Fallback: take based on strategy
+            if strategy == 3:
+                # For random strategy, just take the first sampled
+                if len(sorted_idx) > 0:
+                    selected = [self.benign_updates[sorted_idx[0]]]
+                else:
+                    selected = [self.benign_updates[0]]
+            else:
+                selected = [self.benign_updates[sorted_idx[0]]]
+        
         return selected
 
     def local_train(self, epochs=None) -> torch.Tensor:
@@ -542,14 +586,24 @@ class AttackerClient(Client):
         
         # Step 7: Generate malicious update
         # Paper: "vectors w'_j(t) in F̂ are selected as malicious local models"
-        # We combine the reconstructed features with the poisoned update direction
+        # We combine the reconstructed features with an attack direction that degrades performance
         
-        # Method: Use weighted sum of reconstructed features, biased towards attack
-        # Following reference code: w_attack = sum(new_features) / n * random_noise
-        malicious_direction = F_recon.mean(dim=0)  # (M,)
+        # FIX 1: Generate attack direction that deviates from benign mean (not just mimic)
+        benign_mean = feature_matrix.mean(dim=0)  # Mean of benign updates
+        gsp_recon_mean = F_recon.mean(dim=0)  # Mean of GSP reconstructed features
         
-        # Scale by random factor (tighter range to stay stealthy)
-        random_scale = torch.empty(1, device=self.device).uniform_(-0.2, 0.05).item()
+        # Attack direction: combine GSP reconstruction with deviation from benign mean
+        # This ensures the attack moves away from benign updates (degrading performance)
+        # while still using the graph structure learned by VGAE
+        attack_deviation = gsp_recon_mean - benign_mean  # Deviation from benign
+        malicious_direction = gsp_recon_mean + 0.5 * attack_deviation  # Bias towards attack
+        
+        # Scale by positive factor to ensure attack direction (not just random noise)
+        # Use client_id for diversity but ensure positive scale for attack
+        rng = torch.Generator(device=self.device)
+        rng.manual_seed(self.client_id * 1000 + 42)
+        # Positive scale range: 0.1 to 0.3 (ensures attack direction, not just noise)
+        random_scale = torch.empty(1, device=self.device, generator=rng).uniform_(0.1, 0.3).item()
         gsp_attack = malicious_direction * random_scale
         
         return gsp_attack
@@ -623,12 +677,35 @@ class AttackerClient(Client):
         
         # ============================================================
         # STEP 6: Lagrangian-style objective & dual updates (approximation)
+        # FIX 4: Add explicit attack direction to ensure performance degradation
         # attack_obj ~ deviation from benign mean (maximize)
         # constraint_b: d(w'_j, w'_g) ≤ d_T  (we approximate dist by ||malicious_update||)
         # constraint_c: sum β d(w_i, \bar w_i) ≤ Γ (use selected benign subset)
         # ============================================================
         benign_norms = torch.stack([torch.norm(u) for u in self.benign_updates])
         benign_mean_full = torch.stack([u.detach() for u in self.benign_updates]).mean(dim=0)
+        
+        # FIX 4: Add explicit attack direction component
+        # Compute gradient direction that increases global loss (if proxy loader available)
+        attack_direction = None
+        if self.global_model_params is not None and self.proxy_loader is not None:
+            # Compute gradient of proxy loss w.r.t. malicious_update to get attack direction
+            temp_param = malicious_update.clone().detach().requires_grad_(True)
+            proxy_loss = self._proxy_global_loss(temp_param, max_batches=1)
+            if proxy_loss.requires_grad:
+                proxy_loss.backward()
+                attack_direction = temp_param.grad
+                # Normalize to unit direction
+                if attack_direction is not None and torch.norm(attack_direction) > 1e-8:
+                    attack_direction = attack_direction / torch.norm(attack_direction)
+        
+        # If attack direction available, bias malicious_update towards it
+        if attack_direction is not None:
+            # Combine GSP attack with explicit attack direction
+            # Weight: 70% GSP attack, 30% explicit attack direction
+            attack_component = attack_direction * torch.norm(malicious_update) * 0.3
+            malicious_update = malicious_update * 0.7 + attack_component
+        
         attack_obj = torch.norm(malicious_update - benign_mean_full)
         
         # Constraint (4b)
@@ -661,48 +738,75 @@ class AttackerClient(Client):
         
         # ============================================================
         # STEP 7: Proxy ascent toward global loss (gradient-based on proxy norm)
-        # Use a small optimizer on malicious_update to maximize its norm while respecting constraints
-        proxy_steps = 3
-        proxy_lr = self.proxy_step
+        # FIX 2 & 3: Increase proxy steps and ensure optimization is not completely negated
+        # Use a larger optimizer on malicious_update to maximize global loss while respecting constraints
+        proxy_steps = 10  # Increased from 3 to 10 for stronger optimization
+        proxy_lr = self.proxy_step * 2  # Increased from 0.1 to 0.2 for faster convergence
         proxy_param = malicious_update.clone().detach().to(self.device)
         proxy_param.requires_grad_(True)
         proxy_opt = optim.Adam([proxy_param], lr=proxy_lr)
-        for _ in range(proxy_steps):
+        
+        # Store initial norm to preserve attack direction after optimization
+        initial_norm = torch.norm(proxy_param).item()
+        
+        for step in range(proxy_steps):
             proxy_opt.zero_grad()
             # Proxy objective: maximize F(w'_g) via CE loss on clean subset, minus penalties
             proxy_obj = self._proxy_global_loss(proxy_param, max_batches=1)
             proxy_penalty = torch.tensor(0.0, device=self.device)
+            
+            # Soft constraints: use squared penalty to allow some violation for stronger attack
             if self.d_T is not None:
-                proxy_penalty = proxy_penalty + F.relu(torch.norm(proxy_param) - self.d_T)
+                # Soft constraint: allow slight violation (up to 1.2 * d_T) for stronger attack
+                soft_d_T = self.d_T * 1.2
+                proxy_penalty = proxy_penalty + 0.1 * F.relu(torch.norm(proxy_param) - soft_d_T) ** 2
             if self.gamma is not None and len(selected_benign) > 0:
                 sel_stack = torch.stack(selected_benign)
                 sel_mean = sel_stack.mean(dim=0)
                 distances = torch.norm(sel_stack - sel_mean, dim=1)
                 agg_dist = distances.sum()
-                proxy_penalty = proxy_penalty + F.relu(agg_dist - self.gamma)
+                soft_gamma = self.gamma * 1.2
+                proxy_penalty = proxy_penalty + 0.1 * F.relu(agg_dist - soft_gamma) ** 2
+            
             # Maximize (proxy_obj - penalty) => minimize negative
             proxy_loss = -(proxy_obj - proxy_penalty)
             proxy_loss.backward()
+            
+            # Gradient clipping to prevent explosion
+            torch.nn.utils.clip_grad_norm_([proxy_param], max_norm=1.0)
+            
             proxy_opt.step()
+        
         malicious_update = proxy_param.detach()
         
         # STEP 8: Apply norm matching + (4b) clipping for camouflage
+        # FIX 3: Allow larger norm to preserve attack effectiveness
         # ============================================================
-        target_norm = benign_norms.mean() + 0.1 * benign_norms.std()
-        # If d_T is set, cap the desired norm to d_T to approximate constraint (4b)
+        # Calculate target norm: allow larger deviation from benign mean for stronger attack
+        benign_mean_norm = benign_norms.mean().item()
+        benign_std_norm = benign_norms.std().item()
+        # Increase allowed deviation: from 0.1 to 0.5 std (stronger attack)
+        target_norm = benign_mean_norm + 0.5 * benign_std_norm
+        
+        # If d_T is set, use it as upper bound but allow larger norm if beneficial
         if self.d_T is not None:
-            target_norm = min(target_norm, self.d_T)
+            # Allow norm up to d_T, but prefer larger norm if it helps attack
+            target_norm = min(target_norm, self.d_T * 1.1)  # Allow 10% over d_T for stronger attack
+        
         current_norm = torch.norm(malicious_update)
         if current_norm > 1e-8:
             scale_factor = target_norm / current_norm
-            # Allow slightly larger scaling to push attack, but capped by d_T
-            scale_factor = torch.clamp(scale_factor, 0.5, 2.0)
+            # FIX 2: Preserve attack direction: allow larger scaling to maintain optimization effect
+            # Clamp to allow up to 3x scaling (was 2x) to preserve proxy optimization
+            scale_factor = torch.clamp(scale_factor, 0.3, 3.0)
             malicious_update = malicious_update * scale_factor
         
+        # FIX 3: Apply hard constraint only if significantly over d_T (allow some violation)
         if self.d_T is not None:
             update_norm = torch.norm(malicious_update)
-            if update_norm > self.d_T:
-                malicious_update = malicious_update * (self.d_T / update_norm)
+            # Only clip if significantly over d_T (allow 10% violation for attack effectiveness)
+            if update_norm > self.d_T * 1.1:
+                malicious_update = malicious_update * (self.d_T * 1.1 / update_norm)
         
         print(f"    [Attacker {self.client_id}] GSP Attack: norm={torch.norm(malicious_update):.4f}, "
               f"attack_obj={attack_obj:.4f}, λ={self.lambda_dual:.4f}, ρ={self.rho_dual:.4f}")
