@@ -187,7 +187,7 @@ def setup_experiment(config):
                 attack_start_round=config['attack_start_round'],
                 lambda_attack=config['lambda_attack'],
                 lambda_camouflage=config['lambda_camouflage'],
-                benign_select_ratio=config['benign_select_ratio'],
+                benign_select_ratio=config['benign_select_ratio'],  # Deprecated: Now using gamma constraint for 0-1 knapsack optimization
                 dual_lr=config['dual_lr'],
                 proxy_step=config['proxy_step'],
                 claimed_data_size=claimed_data_size
@@ -381,7 +381,7 @@ def main():
         'lambda_aggregation': 1.0,  # Stronger aggregation-distance constraint
         'lambda_attack': 1.0,  # Softer attack objective to reduce drift
         'lambda_camouflage': 0.2,  # Stronger camouflage to mimic benign
-        'benign_select_ratio': 1.0,  # β subset ratio for attacker graph (data-agnostic attack)
+        'benign_select_ratio': 1.0,  # Deprecated: Now using gamma constraint for 0-1 knapsack optimization (kept for backward compatibility)
         'dual_lr': 0.01,  # Step size for dual variable updates (λ, ρ) in Lagrangian
         'proxy_step': 0.1,  # Step size for gradient-free ascent toward global-loss proxy
         'attacker_claimed_data_size': 1.5,  # Keep claimed size equal to benign to reduce detectability
