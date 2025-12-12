@@ -25,6 +25,9 @@ class NewsClassifierModel(nn.Module):
             model_name,
             num_labels=num_labels
         )
+        # Verify that the correct model is loaded
+        model_type = type(self.model).__name__
+        print(f"  ✓ Loaded model: {model_type} (from {model_name})")
         self._initialize_weights()
 
     def _initialize_weights(self):
