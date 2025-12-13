@@ -352,7 +352,16 @@ class AttackerClient(Client):
             Stacked reduced features tensor of shape (I, M) where I=num_updates, M=dim_reduction_size
         """
         stacked_updates = torch.stack(updates)
-        total_dim = int(stacked_updates.shape[1])  # Convert to Python int
+        # Ensure stacked_updates has valid shape
+        if len(stacked_updates.shape) < 2:
+            raise ValueError(f"[Attacker {self.client_id}] stacked_updates must be 2D, got shape {stacked_updates.shape}")
+        shape_dim = stacked_updates.shape[1]
+        if shape_dim is None:
+            raise ValueError(f"[Attacker {self.client_id}] stacked_updates.shape[1] is None")
+        try:
+            total_dim = int(shape_dim)  # Convert to Python int
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"[Attacker {self.client_id}] Cannot convert shape[1]={shape_dim} to int: {e}")
         
         # If update dimension is smaller than reduction target, skip reduction
         if total_dim <= self.dim_reduction_size:
@@ -364,11 +373,17 @@ class AttackerClient(Client):
             # This ensures diversity among multiple attackers
             import hashlib
             # Use client_id and total_dim to create a unique seed for each attacker
+            # Ensure client_id and total_dim are valid integers
+            if self.client_id is None:
+                raise ValueError(f"client_id is None for attacker")
+            if total_dim is None or total_dim <= 0:
+                raise ValueError(f"total_dim is None or invalid: {total_dim}")
             seed_str = f"{self.client_id}_{total_dim}"
             seed = int(hashlib.md5(seed_str.encode()).hexdigest()[:8], 16) % (2**31)
-            torch.manual_seed(seed)
-            self.feature_indices = torch.randperm(total_dim)[:self.dim_reduction_size].to(self.device)
-            torch.manual_seed(None)  # Reset to default random state
+            # Use numpy random with client_id-based seed (more reliable than torch random state)
+            np_rng = np.random.RandomState(seed)
+            indices = np_rng.permutation(total_dim)[:self.dim_reduction_size]
+            self.feature_indices = torch.tensor(indices, dtype=torch.long, device=self.device)
             
         # Select features
         reduced_features = torch.index_select(stacked_updates, 1, self.feature_indices)
@@ -616,7 +631,21 @@ class AttackerClient(Client):
         Returns:
             Malicious update generated using GSP (reduced dimension M, or None if failed)
         """
-        M = int(feature_matrix.shape[1])  # Reduced dimension - Convert to Python int
+        # Ensure feature_matrix is valid and has correct shape
+        if feature_matrix is None or not isinstance(feature_matrix, torch.Tensor):
+            raise ValueError(f"[Attacker {self.client_id}] feature_matrix is None or invalid")
+        if len(feature_matrix.shape) < 2:
+            raise ValueError(f"[Attacker {self.client_id}] feature_matrix must be 2D, got shape {feature_matrix.shape}")
+        # Get shape dimension - ensure it's a valid integer
+        shape_dim = feature_matrix.shape[1]
+        if shape_dim is None:
+            raise ValueError(f"[Attacker {self.client_id}] feature_matrix.shape[1] is None")
+        try:
+            M = int(shape_dim)  # Reduced dimension - Convert to Python int
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"[Attacker {self.client_id}] Cannot convert shape[1]={shape_dim} to int: {e}")
+        if M <= 0:
+            raise ValueError(f"[Attacker {self.client_id}] Invalid M dimension: {M}")
         
         # Step 1: Compute Laplacian of original graph
         # L = diag(A·1) - A
@@ -734,8 +763,16 @@ class AttackerClient(Client):
         
         # Reduce dimensionality for computational efficiency
         reduced_benign = self._get_reduced_features(selected_benign, fix_indices=False)  # (I, M)
-        M = int(reduced_benign.shape[1])  # Convert to Python int
-        I = int(reduced_benign.shape[0])  # Convert to Python int
+        # Ensure reduced_benign has valid shape
+        if reduced_benign is None or not isinstance(reduced_benign, torch.Tensor):
+            raise ValueError(f"[Attacker {self.client_id}] reduced_benign is None or invalid")
+        if len(reduced_benign.shape) < 2:
+            raise ValueError(f"[Attacker {self.client_id}] reduced_benign must be 2D, got shape {reduced_benign.shape}")
+        try:
+            M = int(reduced_benign.shape[1])  # Convert to Python int
+            I = int(reduced_benign.shape[0])  # Convert to Python int
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"[Attacker {self.client_id}] Cannot convert reduced_benign shape to int: {e}, shape={reduced_benign.shape}")
         
         # ============================================================
         # STEP 2: Construct adjacency matrix A ∈ R^{M×M}
