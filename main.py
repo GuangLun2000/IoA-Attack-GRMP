@@ -162,10 +162,20 @@ def setup_experiment(config):
         else:
             # --- Attacker Client ---
             print(f"  Client {client_id}: ATTACKER (VGAE Enabled)")
-            # Per paper: Attacker can freely set D'_j(t) (claimed_data_size) for weighted aggregation
-            # No restrictions in the paper - attacker can set any value to increase their weight
-            claimed_data_size = config['attacker_claimed_data_size']
-            print(f"    Claimed data size D'_j(t): {claimed_data_size}")
+            # Use actual assigned data size for claimed_data_size (for fair weighted aggregation)
+            # Note: Attackers are data-agnostic (don't use data for training), but use assigned
+            # data size for aggregation weight to maintain realistic attack scenario
+            actual_data_size = len(client_indices[client_id])
+            # Allow config override if attacker wants to claim different size (for attack experiments)
+            config_claimed = config.get('attacker_claimed_data_size', None)
+            if config_claimed is None:
+                # Use actual assigned data size (recommended for realistic scenario)
+                claimed_data_size = actual_data_size
+                print(f"    Claimed data size D'_j(t): {claimed_data_size} (matches assigned data)")
+            else:
+                # Override with config value (for attack experiments)
+                claimed_data_size = config_claimed
+                print(f"    ⚠️  Override: Claimed data size D'_j(t): {claimed_data_size} (actual: {actual_data_size})")
             
             client = AttackerClient(
                 client_id=client_id,
@@ -365,7 +375,9 @@ def main():
         
         # ========== Attack Optimization Parameters ==========
         'proxy_step': 0.1,  # Step size for gradient-free ascent toward global-loss proxy
-        'attacker_claimed_data_size': 1.5,  # Keep claimed size equal to benign to reduce detectability
+        # 'attacker_claimed_data_size': None,  # If None, uses actual assigned data size (recommended for realistic scenario)
+        # If set to a value, overrides actual data size (for attack experiments where attacker claims more data)
+        'attacker_claimed_data_size': None,  # None = use actual assigned data size (recommended)
         
         # ========== Graph Construction Parameters ==========
         'graph_threshold': 0.5,  # Threshold for graph adjacency matrix binarization in VGAE (float, 0.0-1.0)
