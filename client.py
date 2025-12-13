@@ -360,8 +360,15 @@ class AttackerClient(Client):
             
         # Fix feature indices at the start of each attack round to ensure training consistency within the round
         if self.feature_indices is None or not fix_indices:
-            # Randomly select indices
+            # Randomly select indices, but use client_id to ensure different attackers get different indices
+            # This ensures diversity among multiple attackers
+            import hashlib
+            # Use client_id and total_dim to create a unique seed for each attacker
+            seed_str = f"{self.client_id}_{total_dim}"
+            seed = int(hashlib.md5(seed_str.encode()).hexdigest()[:8], 16) % (2**31)
+            torch.manual_seed(seed)
             self.feature_indices = torch.randperm(total_dim)[:self.dim_reduction_size].to(self.device)
+            torch.manual_seed(None)  # Reset to default random state
             
         # Select features
         reduced_features = torch.index_select(stacked_updates, 1, self.feature_indices)
@@ -666,6 +673,13 @@ class AttackerClient(Client):
         select_idx = int(self.client_id % F_recon_rows)  # Ensure Python int
         gsp_attack = F_recon[select_idx].clone()  # Select one row from F̂ as w'_j(t), clone to avoid view issues
         
+        # If F_recon has only one row, add small client-specific perturbation to ensure diversity
+        # This prevents multiple attackers from generating identical attacks
+        if F_recon_rows == 1:
+            perturbation_scale = 0.01 * (self.client_id + 1)  # Scale based on client_id
+            perturbation = torch.randn_like(gsp_attack) * perturbation_scale
+            gsp_attack = gsp_attack + perturbation
+        
         # Ensure gsp_attack is 1D tensor (not scalar)
         gsp_dim_count = int(gsp_attack.dim())  # Convert to Python int
         if gsp_dim_count == 0:
@@ -810,7 +824,14 @@ class AttackerClient(Client):
         # ============================================================
         proxy_steps = 20  # Increased for better convergence
         proxy_lr = self.proxy_step
-        proxy_param = malicious_update.clone().detach().to(self.device)
+        # Add small client-specific perturbation to initial malicious_update to ensure diversity
+        # This helps different attackers converge to different local optima
+        if self.is_attacker:
+            perturbation_scale = 0.001 * (self.client_id + 1)  # Small scale, client-specific
+            initial_perturbation = torch.randn_like(malicious_update) * perturbation_scale
+            proxy_param = (malicious_update + initial_perturbation).clone().detach().to(self.device)
+        else:
+            proxy_param = malicious_update.clone().detach().to(self.device)
         proxy_param.requires_grad_(True)
         proxy_opt = optim.Adam([proxy_param], lr=proxy_lr)
         
