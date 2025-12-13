@@ -269,6 +269,56 @@ class AttackerClient(Client):
         selected = [self.benign_updates[i] for i in sorted(selected_indices)]
         
         return selected
+    
+    def _get_selected_benign_indices(self) -> List[int]:
+        """
+        Get indices of selected benign updates (β selection).
+        This is a helper method to avoid tensor comparison issues.
+        """
+        if not self.benign_updates:
+            return []
+        
+        # Compute distances from mean for all benign updates
+        benign_stack = torch.stack([u.detach() for u in self.benign_updates])
+        benign_mean = benign_stack.mean(dim=0)
+        distances = torch.norm(benign_stack - benign_mean, dim=1).cpu().numpy()
+        
+        # If gamma is not set, use all updates
+        if self.gamma is None:
+            return list(range(len(self.benign_updates)))
+        
+        # Convert gamma to capacity
+        capacity = float(self.gamma)
+        n = len(distances)
+        
+        # Handle edge cases
+        if n == 0:
+            return []
+        if capacity <= 0:
+            # If capacity is 0 or negative, select item with minimum distance
+            min_idx = np.argmin(distances)
+            return [int(min_idx)]
+        
+        # Greedy approach: sort by distance and select items until capacity is reached
+        sorted_indices = np.argsort(distances)  # Sort by distance (ascending)
+        
+        selected_indices = []
+        total_dist = 0.0
+        
+        for idx in sorted_indices:
+            d = distances[idx]
+            if total_dist + d <= capacity:
+                selected_indices.append(int(idx))
+                total_dist += d
+            else:
+                break
+        
+        # If no items selected (all distances > capacity), select the one with minimum distance
+        if not selected_indices:
+            min_idx = np.argmin(distances)
+            selected_indices = [int(min_idx)]
+        
+        return sorted(selected_indices)
 
     def local_train(self, epochs=None) -> torch.Tensor:
         """
@@ -722,7 +772,8 @@ class AttackerClient(Client):
         # ============================================================
         
         # Get beta selection indices (which benign updates were selected)
-        beta_selection = [i for i, u in enumerate(self.benign_updates) if u in selected_benign]
+        # Use helper method to avoid tensor comparison issues
+        beta_selection = self._get_selected_benign_indices()
         
         # ============================================================
         # STEP 7: Optimize w'_j(t) to maximize F(w'_g(t))
@@ -755,7 +806,8 @@ class AttackerClient(Client):
                 # Note: w'_g(t) = weighted_avg(selected_benign) + (D'_j/D) * w'_j(t)
                 # For simplicity, we approximate: d(w'_j, w'_g) ≈ ||w'_j - w_g||
                 # This is exact when D'_j << D (attacker has small weight)
-                dist_to_global = torch.norm(proxy_param)
+                # Ensure torch.norm returns a scalar by flattening first
+                dist_to_global = torch.norm(proxy_param.view(-1))
                 constraint_b_violation = F.relu(dist_to_global - self.d_T)
             
             constraint_c_violation = torch.tensor(0.0, device=self.device)
