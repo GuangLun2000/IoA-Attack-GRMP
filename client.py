@@ -287,7 +287,7 @@ class AttackerClient(Client):
         Randomly selects indices to slice the high-dimensional vector.
         """
         stacked_updates = torch.stack(updates)
-        total_dim = stacked_updates.shape[1]
+        total_dim = int(stacked_updates.shape[1])  # Convert to Python int
         
         # 如果更新维度小于降维目标，则不降维
         if total_dim <= self.dim_reduction_size:
@@ -430,12 +430,13 @@ class AttackerClient(Client):
         # For VGAE input, we use F^T as node features: (M, I)
         node_features = feature_matrix.t()  # (M, I)
         
-        input_dim = node_features.shape[1]  # I (number of clients)
-        num_nodes = node_features.shape[0]  # M (feature dimension)
+        input_dim = int(node_features.shape[1])  # I (number of clients) - Convert to Python int
+        num_nodes = int(node_features.shape[0])  # M (feature dimension) - Convert to Python int
         
         # Initialize VGAE if needed
         # Paper: input_dim = I (number of clients/benign models)
-        if self.vgae is None or self.vgae.gc1.weight.shape[0] != input_dim:
+        vgae_input_dim = int(self.vgae.gc1.weight.shape[0]) if self.vgae is not None else None
+        if self.vgae is None or vgae_input_dim != input_dim:
             # Following paper: hidden1_dim=32, hidden2_dim=16
             hidden_dim = 32
             latent_dim = 16
@@ -571,11 +572,26 @@ class AttackerClient(Client):
         # According to paper, we select a vector from F̂ as w'_j(t)
         # F̂ shape: (I, M) where I is number of benign updates, M is feature dimension
         
+        # Check if F_recon is valid
+        F_recon_rows = int(F_recon.shape[0])  # Convert to Python int
+        if F_recon_rows == 0:
+            # Empty feature matrix: return zeros
+            print(f"    [Attacker {self.client_id}] F_recon is empty, using zero fallback")
+            return torch.zeros(M, device=feature_matrix.device, dtype=feature_matrix.dtype)
+        
         # Select a vector from F̂ as the malicious update
         # Use client_id to select different vectors for different attackers (for diversity)
         # This ensures different attackers use different malicious models from F̂
-        select_idx = self.client_id % F_recon.shape[0]
+        select_idx = self.client_id % F_recon_rows
         gsp_attack = F_recon[select_idx]  # Select one row from F̂ as w'_j(t)
+        
+        # Ensure gsp_attack is 1D tensor (not scalar)
+        if gsp_attack.dim() == 0:
+            # Scalar tensor: expand to 1D
+            gsp_attack = gsp_attack.unsqueeze(0)
+        elif gsp_attack.dim() > 1:
+            # Multi-dimensional: flatten
+            gsp_attack = gsp_attack.flatten()
         
         return gsp_attack
 
@@ -645,10 +661,19 @@ class AttackerClient(Client):
         # Non-selected dimensions remain zero.
         # ============================================================
         malicious_update = torch.zeros_like(poisoned_update)
-        total_dim = malicious_update.shape[0]
+        total_dim = int(malicious_update.shape[0])  # Convert to Python int
         
         if gsp_attack_reduced is not None:
-            gsp_dim = gsp_attack_reduced.shape[0]
+            # Ensure gsp_attack_reduced is 1D tensor
+            if gsp_attack_reduced.dim() == 0:
+                # Scalar tensor: expand to 1D
+                gsp_attack_reduced = gsp_attack_reduced.unsqueeze(0)
+            elif gsp_attack_reduced.dim() > 1:
+                # Multi-dimensional: flatten
+                gsp_attack_reduced = gsp_attack_reduced.flatten()
+            
+            # Get dimension as Python int (not tensor)
+            gsp_dim = int(gsp_attack_reduced.shape[0])
             
             if self.feature_indices is not None:
                 # Dimension reduction was applied
