@@ -741,7 +741,7 @@ class AttackerClient(Client):
             # Apply hard constraint (4b) projection after each step
             # This ensures d(w'_j, w'_g) ≤ d_T is always satisfied
             if self.d_T is not None:
-                dist_to_global = torch.norm(proxy_param)
+                dist_to_global = torch.norm(proxy_param).item()
                 if dist_to_global > self.d_T:
                     # Project to constraint set: scale down to satisfy d ≤ d_T
                     proxy_param.data = proxy_param.data * (self.d_T / dist_to_global)
@@ -756,14 +756,15 @@ class AttackerClient(Client):
             # Compute distance from global model
             # Approximation: d(w'_j, w'_g) ≈ ||w'_j - w_g||
             # This is exact when attacker weight is small
-            dist_to_global = torch.norm(malicious_update)
+            dist_to_global = torch.norm(malicious_update).item()
             
             if dist_to_global > self.d_T:
                 # Hard constraint: project to satisfy d ≤ d_T
                 scale_factor = self.d_T / dist_to_global
                 malicious_update = malicious_update * scale_factor
+                final_norm = torch.norm(malicious_update).item()
                 print(f"    [Attacker {self.client_id}] Applied hard constraint projection: "
-                      f"scaled from {dist_to_global:.4f} to {torch.norm(malicious_update):.4f}")
+                      f"scaled from {dist_to_global:.4f} to {final_norm:.4f}")
         
         # Compute final attack objective value for logging
         final_global_loss = self._proxy_global_loss(malicious_update, max_batches=1, skip_dim_check=False)
@@ -776,9 +777,10 @@ class AttackerClient(Client):
             distances = torch.norm(sel_stack - sel_mean, dim=1)
             constraint_c_value = distances.sum()
         
+        malicious_norm = torch.norm(malicious_update).item()
         print(f"    [Attacker {self.client_id}] GRMP Attack: "
               f"F(w'_g)={final_global_loss.item():.4f}, "
-              f"||w'_j||={torch.norm(malicious_update):.4f}, "
+              f"||w'_j||={malicious_norm:.4f}, "
               f"constraint_c={constraint_c_value.item():.4f}")
         
         return malicious_update.detach()
