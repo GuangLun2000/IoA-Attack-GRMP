@@ -29,22 +29,31 @@ class Client:
         
         Note: All parameters must be explicitly provided. Default values are removed to prevent
         inconsistencies with config settings. See main.py for proper usage.
+        
+        Memory optimization: Model is kept in CPU by default to save GPU memory.
+        It will be moved to GPU only during training (for benign clients) or proxy loss calculation (for attackers).
         """
         self.client_id = client_id
         self.model = copy.deepcopy(model)
+        # Keep model in CPU initially to save GPU memory
+        # Will be moved to GPU only when needed (training or proxy loss calculation)
         self.data_loader = data_loader
         self.lr = lr
         self.local_epochs = local_epochs
         self.alpha = alpha  # Regularization coefficient α ∈ [0,1] from paper formula (1)
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.model.to(self.device)
-        self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
+        # Do NOT move model to GPU here - will be moved on-demand
+        self.optimizer = None  # Will be created when needed
         self.current_round = 0
         self.is_attacker = False
+        self._model_on_gpu = False  # Track if model is currently on GPU
 
     def reset_optimizer(self):
-        """Reset the optimizer."""
-        self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
+        """Reset the optimizer. Only valid when model is on GPU."""
+        if self._model_on_gpu:
+            self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
+        else:
+            self.optimizer = None
 
     def set_round(self, round_num: int):
         """Set the current training round."""
@@ -58,10 +67,16 @@ class Client:
             initial_params: Initial model parameters (flattened)
             
         Returns:
-            Model update tensor (flattened)
+            Model update tensor (flattened, on CPU)
+        
+        Note: Works on both CPU and GPU models. Returns CPU tensor to save GPU memory.
         """
         current_params = self.model.get_flat_params()
-        return current_params - initial_params
+        update = current_params - initial_params
+        # Move update to CPU to save GPU memory
+        if update.device.type == 'cuda':
+            update = update.cpu()
+        return update
 
     def local_train(self, epochs=None) -> torch.Tensor:
         """Base local training method (to be overridden)."""
@@ -86,9 +101,18 @@ class BenignClient(Client):
         """Perform local training - includes proximal regularization."""
         if epochs is None:
             epochs = self.local_epochs
-            
+        
+        # Move model to GPU for training
+        if not self._model_on_gpu:
+            self.model.to(self.device)
+            self._model_on_gpu = True
+            # Create optimizer when model is on GPU
+            if self.optimizer is None:
+                self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
+        
         self.model.train()
-        initial_params = self.model.get_flat_params().clone()
+        # Get initial params and move to CPU to save GPU memory
+        initial_params = self.model.get_flat_params().clone().cpu()
         
         # Proximal regularization coefficient (paper formula (1): α ∈ [0,1])
         mu = self.alpha
@@ -113,8 +137,11 @@ class BenignClient(Client):
                 ce_loss = nn.CrossEntropyLoss()(logits, labels)
                 
                 # Add proximal regularization term
+                # Move initial_params to GPU temporarily for computation
                 current_params = self.model.get_flat_params()
-                proximal_term = mu * torch.norm(current_params - initial_params) ** 2
+                initial_params_gpu = initial_params.to(self.device)
+                proximal_term = mu * torch.norm(current_params - initial_params_gpu) ** 2
+                initial_params_gpu = None  # Release GPU reference
                 
                 loss = ce_loss + proximal_term
                 
@@ -130,7 +157,18 @@ class BenignClient(Client):
                 
                 pbar.set_postfix({'loss': loss.item()})
         
-        return self.get_model_update(initial_params)
+        # Calculate update (will be on CPU)
+        update = self.get_model_update(initial_params)
+        
+        # Move model back to CPU to free GPU memory
+        self.model.cpu()
+        self._model_on_gpu = False
+        # Delete optimizer to free its GPU memory (Adam states)
+        del self.optimizer
+        self.optimizer = None
+        torch.cuda.empty_cache()  # Clear CUDA cache
+        
+        return update
 
     def receive_benign_updates(self, updates: List[torch.Tensor]):
         # Benign clients do not use this method
@@ -225,7 +263,8 @@ class AttackerClient(Client):
         # Formula 4 constraints parameters
         self.d_T = None  # Distance threshold for constraint (4b): d(w'_j(t), w_g(t)) ≤ d_T
         self.gamma = None  # Upper bound for constraint (4c): Σ β'_{i,j}(t) d(w_i(t), w̄_i(t)) ≤ Γ
-        self.global_model_params = None  # Store global model params for constraint (4b)
+        self.global_model_params = None  # Store global model params for constraint (4b) (will be on GPU when needed)
+        # Get model parameter count (works on CPU model)
         self._flat_numel = int(self.model.get_flat_params().numel())  # Convert to Python int
 
     def prepare_for_round(self, round_num: int):
@@ -236,8 +275,9 @@ class AttackerClient(Client):
 
     def receive_benign_updates(self, updates: List[torch.Tensor]):
         """Receive updates from benign clients."""
-        # Store detached copies to avoid graph retention issues
-        self.benign_updates = [u.detach().clone() for u in updates]
+        # Store detached copies on CPU to save GPU memory
+        # Updates will be moved to GPU only when needed for VGAE processing
+        self.benign_updates = [u.detach().clone().cpu() for u in updates]
 
     def _select_benign_subset(self) -> List[torch.Tensor]:
         """
@@ -254,14 +294,22 @@ class AttackerClient(Client):
         Note: Since we want to minimize the sum and the constraint is also on the sum,
         the optimal solution is to select as many items as possible while staying within capacity.
         We use a greedy approach to find an approximate optimal selection.
+        
+        Returns:
+            List of selected benign updates (on CPU to save GPU memory)
         """
         if not self.benign_updates:
             return []
         
         # Compute distances from mean for all benign updates
-        benign_stack = torch.stack([u.detach() for u in self.benign_updates])
+        # Move to GPU only for computation, then back to CPU
+        benign_updates_gpu = [u.to(self.device) for u in self.benign_updates]
+        benign_stack = torch.stack([u.detach() for u in benign_updates_gpu])
         benign_mean = benign_stack.mean(dim=0)
         distances = torch.norm(benign_stack - benign_mean, dim=1).cpu().numpy()
+        # Clean up GPU references immediately
+        del benign_updates_gpu, benign_stack, benign_mean
+        torch.cuda.empty_cache()
         
         # If gamma is not set, use all updates
         if self.gamma is None:
@@ -318,9 +366,14 @@ class AttackerClient(Client):
             return []
         
         # Compute distances from mean for all benign updates
-        benign_stack = torch.stack([u.detach() for u in self.benign_updates])
+        # Move to GPU only for computation, then back to CPU
+        benign_updates_gpu = [u.to(self.device) for u in self.benign_updates]
+        benign_stack = torch.stack([u.detach() for u in benign_updates_gpu])
         benign_mean = benign_stack.mean(dim=0)
         distances = torch.norm(benign_stack - benign_mean, dim=1).cpu().numpy()
+        # Clean up GPU references immediately
+        del benign_updates_gpu, benign_stack, benign_mean
+        torch.cuda.empty_cache()
         
         # If gamma is not set, use all updates
         if self.gamma is None:
@@ -365,10 +418,14 @@ class AttackerClient(Client):
         
         Attackers are not assigned local data, so they return zero update.
         The actual attack is generated in camouflage_update using VGAE+GSP.
+        
+        Returns:
+            Zero update tensor on CPU (to save GPU memory)
         """
         # Attackers don't have local data, return zero update
+        # Model is on CPU, so initial_params is on CPU
         initial_params = self.model.get_flat_params().clone()
-        return torch.zeros_like(initial_params)
+        return torch.zeros_like(initial_params)  # Already on CPU
 
     def _get_reduced_features(self, updates: List[torch.Tensor], fix_indices=True) -> torch.Tensor:
         """
@@ -450,13 +507,19 @@ class AttackerClient(Client):
         using stateless.functional_call with (w_g + malicious_update).
         
         Args:
-            malicious_update: Update vector to evaluate
+            malicious_update: Update vector to evaluate (can be on CPU or GPU)
             max_batches: Maximum number of batches to process
             skip_dim_check: If True, skip dimension check (for performance in loops)
+        
+        Note: Model will be temporarily moved to GPU for computation, then moved back to CPU.
         """
         if self.global_model_params is None or self.proxy_loader is None:
             return torch.tensor(0.0, device=self.device)
 
+        # Ensure malicious_update is on GPU for computation
+        if malicious_update.device.type != 'cuda':
+            malicious_update = malicious_update.to(self.device)
+        
         # Ensure shapes match: flatten to 1D and check dimension
         malicious_update = malicious_update.view(-1)  # Flatten to 1D (O(1), just view change)
         if not skip_dim_check and int(malicious_update.numel()) != self._flat_numel:
@@ -464,35 +527,49 @@ class AttackerClient(Client):
             print(f"    [Attacker {self.client_id}] Proxy loss dimension mismatch: got {malicious_update.numel()}, expected {self._flat_numel}")
             return torch.tensor(0.0, device=self.device)
 
-        candidate_params = self.global_model_params + malicious_update
-        # Skip dimension check if already validated (performance optimization)
-        param_dict = self._flat_to_param_dict(candidate_params, skip_dim_check=skip_dim_check)
+        # Move model to GPU temporarily for proxy loss calculation
+        model_was_on_cpu = not self._model_on_gpu
+        if model_was_on_cpu:
+            self.model.to(self.device)
+            self._model_on_gpu = True
 
-        total_loss = 0.0
-        batches = 0
+        try:
+            candidate_params = self.global_model_params + malicious_update
+            # Skip dimension check if already validated (performance optimization)
+            param_dict = self._flat_to_param_dict(candidate_params, skip_dim_check=skip_dim_check)
 
-        for batch in self.proxy_loader:
-            input_ids = batch['input_ids'].to(self.device)
-            attention_mask = batch['attention_mask'].to(self.device)
-            labels = batch['labels'].to(self.device)
+            total_loss = 0.0
+            batches = 0
 
-            logits = stateless.functional_call(
-                self.model,
-                param_dict,
-                args=(),
-                kwargs={'input_ids': input_ids, 'attention_mask': attention_mask}
-            )
+            for batch in self.proxy_loader:
+                input_ids = batch['input_ids'].to(self.device)
+                attention_mask = batch['attention_mask'].to(self.device)
+                labels = batch['labels'].to(self.device)
 
-            ce_loss = F.cross_entropy(logits, labels)
-            total_loss = total_loss + ce_loss
-            batches += 1
-            if batches >= max_batches:
-                break
+                logits = stateless.functional_call(
+                    self.model,
+                    param_dict,
+                    args=(),
+                    kwargs={'input_ids': input_ids, 'attention_mask': attention_mask}
+                )
 
-        if batches == 0:
-            return torch.tensor(0.0, device=self.device)
+                ce_loss = F.cross_entropy(logits, labels)
+                total_loss = total_loss + ce_loss
+                batches += 1
+                if batches >= max_batches:
+                    break
 
-        return total_loss / batches
+            if batches == 0:
+                result = torch.tensor(0.0, device=self.device)
+            else:
+                result = total_loss / batches
+        finally:
+            # Move model back to CPU to free GPU memory
+            if model_was_on_cpu:
+                self.model.cpu()
+                self._model_on_gpu = False
+
+        return result
 
     def _construct_graph(self, reduced_features: torch.Tensor) -> torch.Tensor:
         """
@@ -595,6 +672,8 @@ class AttackerClient(Client):
 
     def set_global_model_params(self, global_params: torch.Tensor):
         """Set global model parameters for constraint (4b) calculation."""
+        # Store on GPU but only when needed (will be moved in _proxy_global_loss)
+        # Keep on same device as provided to avoid unnecessary transfers
         self.global_model_params = global_params.clone().detach().to(self.device)
     
     def set_constraint_params(self, d_T: float = None, gamma: float = None):
@@ -790,15 +869,21 @@ class AttackerClient(Client):
             print(f"    [Attacker {self.client_id}] No benign subset selected, return zero update")
             return poisoned_update  # poisoned_update is always zero (attackers don't train)
 
-        benign_stack = torch.stack([u.detach() for u in selected_benign])  # (I, full_dim)
+        # Move selected updates to GPU for processing
+        selected_benign_gpu = [u.to(self.device) for u in selected_benign]
+        benign_stack = torch.stack([u.detach() for u in selected_benign_gpu])  # (I, full_dim)
         
         # Reduce dimensionality for computational efficiency
-        reduced_benign = self._get_reduced_features(selected_benign, fix_indices=False)  # (I, M)
+        reduced_benign = self._get_reduced_features(selected_benign_gpu, fix_indices=False)  # (I, M)
+        # Clean up benign_stack and selected_benign_gpu after feature reduction (keep selected_benign on CPU for later use)
+        del benign_stack, selected_benign_gpu
+        torch.cuda.empty_cache()
+        
         # Ensure reduced_benign has valid shape
         if reduced_benign is None or not isinstance(reduced_benign, torch.Tensor):
             raise ValueError(f"[Attacker {self.client_id}] reduced_benign is None or invalid")
         if len(reduced_benign.shape) < 2:
-            raise ValueError(f"[Attacker {self.client_id}] reduced_benign must be 2D, got shape {reduced_benign.shape}")
+            raise ValueError(f"[Attacker {self.client_id}] reduced_benign must be 2D, got shape={reduced_benign.shape}")
         try:
             M = int(reduced_benign.shape[1])  # Convert to Python int
             I = int(reduced_benign.shape[0])  # Convert to Python int
@@ -825,12 +910,21 @@ class AttackerClient(Client):
             reduced_benign, adj_matrix, adj_recon, poisoned_update
         )
         
+        # Clean up VGAE-related GPU tensors
+        del reduced_benign, adj_matrix, adj_recon
+        torch.cuda.empty_cache()
+        
         # ============================================================
         # STEP 5: Expand GSP attack back to full dimension
         # Expand GSP attack from reduced dimension M back to full dimension.
         # Non-selected dimensions remain zero.
         # ============================================================
-        malicious_update = torch.zeros_like(poisoned_update)
+        # Create malicious_update on CPU to save GPU memory
+        # poisoned_update is likely on CPU, but ensure we create on CPU
+        if poisoned_update.device.type == 'cuda':
+            malicious_update = torch.zeros_like(poisoned_update)
+        else:
+            malicious_update = torch.zeros_like(poisoned_update, device='cpu')
         total_dim = int(malicious_update.shape[0])  # Convert to Python int
         
         # _gsp_generate_malicious always returns a tensor (never None)
@@ -931,11 +1025,15 @@ class AttackerClient(Client):
             constraint_c_violation = torch.tensor(0.0, device=self.device)
             if self.gamma is not None and len(selected_benign) > 0:
                 # Constraint (4c): Σ β'_{i,j}(t) d(w_i(t), w̄_i(t)) ≤ Γ
-                sel_stack = torch.stack(selected_benign)
+                # selected_benign is on CPU, need to move to GPU for computation
+                sel_benign_gpu = [u.to(self.device) for u in selected_benign]
+                sel_stack = torch.stack(sel_benign_gpu)
                 sel_mean = sel_stack.mean(dim=0)
                 distances = torch.norm(sel_stack - sel_mean, dim=1)
                 agg_dist = distances.sum()  # This returns a scalar tensor (0-dim)
                 constraint_c_violation = F.relu(agg_dist - self.gamma)
+                # Clean up GPU references
+                del sel_benign_gpu, sel_stack, sel_mean, distances
             
             # Backpropagate to maximize global loss
             objective.backward()
@@ -954,6 +1052,10 @@ class AttackerClient(Client):
                     proxy_param.data = proxy_param.data * (self.d_T / dist_to_global)
         
         malicious_update = proxy_param.detach()
+        
+        # Clean up optimizer to free GPU memory
+        del proxy_opt
+        torch.cuda.empty_cache()
         
         # ============================================================
         # STEP 8: Final hard constraint enforcement (Constraint 4b)
@@ -980,10 +1082,14 @@ class AttackerClient(Client):
         # Compute constraint (4c) for logging
         constraint_c_value = torch.tensor(0.0, device=self.device)
         if self.gamma is not None and len(selected_benign) > 0:
-            sel_stack = torch.stack(selected_benign)
+            # Move selected_benign to GPU temporarily for computation
+            sel_benign_gpu = [u.to(self.device) for u in selected_benign]
+            sel_stack = torch.stack(sel_benign_gpu)
             sel_mean = sel_stack.mean(dim=0)
             distances = torch.norm(sel_stack - sel_mean, dim=1)
             constraint_c_value = distances.sum()  # This returns a scalar tensor (0-dim), safe for .item()
+            # Clean up GPU references
+            del sel_benign_gpu, sel_stack, sel_mean, distances
         
         malicious_norm = torch.norm(malicious_update).item()
         print(f"    [Attacker {self.client_id}] GRMP Attack: "
@@ -991,4 +1097,10 @@ class AttackerClient(Client):
               f"||w'_j||={malicious_norm:.4f}, "
               f"constraint_c={constraint_c_value.item():.4f}")
         
-        return malicious_update.detach()
+        # Move malicious_update to CPU before returning to free GPU memory
+        malicious_update_cpu = malicious_update.cpu()
+        # Clean up GPU references
+        del malicious_update, final_global_loss, constraint_c_value
+        torch.cuda.empty_cache()
+        
+        return malicious_update_cpu.detach()
