@@ -128,7 +128,9 @@ def setup_experiment(config):
         tolerance_factor=config['tolerance_factor'],
         d_T=config['d_T'],
         gamma=config['gamma'],
-        similarity_alpha=config['similarity_alpha']
+        similarity_alpha=config['similarity_alpha'],
+        defense_high_rejection_threshold=config['defense_high_rejection_threshold'],
+        defense_threshold_decay=config['defense_threshold_decay']
     )
 
     # 6. Create Clients
@@ -157,7 +159,8 @@ def setup_experiment(config):
                 lr=config['client_lr'],
                 local_epochs=config['local_epochs'],
                 alpha=config['alpha'],
-                data_indices=client_indices[client_id]
+                data_indices=client_indices[client_id],
+                grad_clip_norm=config['grad_clip_norm']
             )
         else:
             # --- Attacker Client ---
@@ -190,7 +193,17 @@ def setup_experiment(config):
                 vgae_lr=config['vgae_lr'],
                 graph_threshold=config['graph_threshold'],
                 proxy_step=config['proxy_step'],
-                claimed_data_size=claimed_data_size
+                claimed_data_size=claimed_data_size,
+                proxy_sample_size=config['proxy_sample_size'],
+                proxy_max_batches_opt=config['proxy_max_batches_opt'],
+                proxy_max_batches_eval=config['proxy_max_batches_eval'],
+                vgae_hidden_dim=config['vgae_hidden_dim'],
+                vgae_latent_dim=config['vgae_latent_dim'],
+                vgae_dropout=config['vgae_dropout'],
+                proxy_steps=config['proxy_steps'],
+                gsp_perturbation_scale=config['gsp_perturbation_scale'],
+                opt_init_perturbation_scale=config['opt_init_perturbation_scale'],
+                grad_clip_norm=config['grad_clip_norm']
             )
 
         server.register_client(client)
@@ -372,12 +385,27 @@ def main():
         'dim_reduction_size': 10000,  # Reduced dimensionality of LLM parameters
         'vgae_epochs': 10,  # Number of epochs for VGAE training (reference: 10)
         'vgae_lr': 0.01,  # Learning rate for VGAE optimizer (reference: 0.01)
+        'vgae_hidden_dim': 32,  # VGAE hidden layer dimension (per paper: hidden1_dim=32)
+        'vgae_latent_dim': 16,  # VGAE latent space dimension (per paper: hidden2_dim=16)
+        'vgae_dropout': 0.0,  # VGAE dropout rate (float, 0.0-1.0)
         
         # ========== Attack Optimization Parameters ==========
         'proxy_step': 0.1,  # Step size for gradient-free ascent toward global-loss proxy
+        'proxy_steps': 20,  # Number of optimization steps for attack objective (int)
+        'gsp_perturbation_scale': 0.01,  # Perturbation scale for GSP attack diversity (float)
+        'opt_init_perturbation_scale': 0.001,  # Perturbation scale for optimization initialization (float)
+        'grad_clip_norm': 1.0,  # Gradient clipping norm for training stability (float)
         # 'attacker_claimed_data_size': None,  # If None, uses actual assigned data size (recommended for realistic scenario)
         # If set to a value, overrides actual data size (for attack experiments where attacker claims more data)
         'attacker_claimed_data_size': None,  # None = use actual assigned data size (recommended)
+        
+        # ========== Proxy Loss Estimation Parameters ==========
+        'proxy_sample_size': 512,  # Number of samples in proxy dataset for F(w'_g) estimation (int)
+                                   # Increased from 128 to 512 for better accuracy (4 batches with test_batch_size=128)
+        'proxy_max_batches_opt': 2,  # Max batches for proxy loss in optimization loop (int)
+                                      # Used during gradient-based optimization (20 steps per round)
+        'proxy_max_batches_eval': 4,  # Max batches for proxy loss in final evaluation (int)
+                                       # Used for final attack objective logging (1 call per round)
         
         # ========== Graph Construction Parameters ==========
         'graph_threshold': 0.5,  # Threshold for graph adjacency matrix binarization in VGAE (float, 0.0-1.0)
@@ -386,6 +414,8 @@ def main():
         'defense_threshold': 0,  # Base threshold for defense mechanism (float, lower = more strict)
         'tolerance_factor': 3.0,  # Tolerance factor for defense mechanism (float, higher = more lenient)
         'similarity_alpha': 0.5,  # Weight for pairwise similarities in mixed similarity computation (float, 0.0-1.0)
+        'defense_high_rejection_threshold': 0.4,  # High rejection rate threshold for adaptive defense (float, 0.0-1.0)
+        'defense_threshold_decay': 0.9,  # Decay factor for defense threshold when high rejection detected (float, 0.0-1.0)
         
         # ========== Visualization ==========
         'generate_plots': True,  # Whether to generate visualization plots (bool)

@@ -72,10 +72,11 @@ class Client:
 class BenignClient(Client):
 
     def __init__(self, client_id: int, model: nn.Module, data_loader, lr, local_epochs, alpha,
-                 data_indices=None):
+                 data_indices=None, grad_clip_norm=1.0):
         super().__init__(client_id, model, data_loader, lr, local_epochs, alpha)
         # Track assigned data indices for proper aggregation weighting
         self.data_indices = data_indices or []
+        self.grad_clip_norm = grad_clip_norm
 
     def prepare_for_round(self, round_num: int):
         """Benign clients do not require special preparation."""
@@ -120,7 +121,7 @@ class BenignClient(Client):
                 self.optimizer.zero_grad()
                 loss.backward()
                 
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.grad_clip_norm)
                 
                 self.optimizer.step()
                 
@@ -144,7 +145,17 @@ class AttackerClient(Client):
                  dim_reduction_size=10000,
                  vgae_epochs=20, vgae_lr=0.01, graph_threshold=0.5,
                  proxy_step=0.1,
-                 claimed_data_size=1.0):
+                 claimed_data_size=1.0,
+                 proxy_sample_size=512,
+                 proxy_max_batches_opt=2,
+                 proxy_max_batches_eval=4,
+                 vgae_hidden_dim=32,
+                 vgae_latent_dim=16,
+                 vgae_dropout=0.0,
+                 proxy_steps=20,
+                 gsp_perturbation_scale=0.01,
+                 opt_init_perturbation_scale=0.001,
+                 grad_clip_norm=1.0):
         """
         Initialize an attacker client with VGAE-based camouflage capabilities.
         
@@ -162,6 +173,16 @@ class AttackerClient(Client):
             graph_threshold: Threshold for graph adjacency matrix binarization (default: 0.5)
             proxy_step: Step size for gradient-free ascent toward global-loss proxy (default: 0.1)
             claimed_data_size: Reported data size D'_j(t) for weighted aggregation (default: 1.0)
+            proxy_sample_size: Number of samples in proxy dataset for F(w'_g) estimation (default: 512)
+            proxy_max_batches_opt: Max batches for proxy loss in optimization loop (default: 2)
+            proxy_max_batches_eval: Max batches for proxy loss in final evaluation (default: 4)
+            vgae_hidden_dim: VGAE hidden layer dimension (default: 32, per paper)
+            vgae_latent_dim: VGAE latent space dimension (default: 16, per paper)
+            vgae_dropout: VGAE dropout rate (default: 0.0)
+            proxy_steps: Number of optimization steps for attack objective (default: 20)
+            gsp_perturbation_scale: Perturbation scale for GSP attack diversity (default: 0.01)
+            opt_init_perturbation_scale: Perturbation scale for optimization initialization (default: 0.001)
+            grad_clip_norm: Gradient clipping norm for training stability (default: 1.0)
         
         Note: lr, local_epochs, and alpha must be explicitly provided to ensure consistency
         with config settings. Other parameters have defaults but should be set via config in main.py.
@@ -176,6 +197,16 @@ class AttackerClient(Client):
         self.graph_threshold = graph_threshold
         self.proxy_step = proxy_step
         self.claimed_data_size = claimed_data_size  # For weighted aggregation (paper: D'(t))
+        self.proxy_sample_size = proxy_sample_size
+        self.proxy_max_batches_opt = proxy_max_batches_opt
+        self.proxy_max_batches_eval = proxy_max_batches_eval
+        self.vgae_hidden_dim = vgae_hidden_dim
+        self.vgae_latent_dim = vgae_latent_dim
+        self.vgae_dropout = vgae_dropout
+        self.proxy_steps = proxy_steps
+        self.gsp_perturbation_scale = gsp_perturbation_scale
+        self.opt_init_perturbation_scale = opt_init_perturbation_scale
+        self.grad_clip_norm = grad_clip_norm
 
         dummy_loader = data_manager.get_empty_loader()
         super().__init__(client_id, model, dummy_loader, lr, local_epochs, alpha)
@@ -189,7 +220,7 @@ class AttackerClient(Client):
         
         # Data-agnostic attack: no local data usage
         self.original_business_loader = None
-        self.proxy_loader = data_manager.get_proxy_eval_loader()
+        self.proxy_loader = data_manager.get_proxy_eval_loader(sample_size=self.proxy_sample_size)
         
         # Formula 4 constraints parameters
         self.d_T = None  # Distance threshold for constraint (4b): d(w'_j(t), w_g(t)) ≤ d_T
@@ -540,10 +571,9 @@ class AttackerClient(Client):
         # Paper: input_dim = I (number of clients/benign models)
         vgae_input_dim = int(self.vgae.gc1.weight.shape[0]) if self.vgae is not None else None
         if self.vgae is None or vgae_input_dim != input_dim:
-            # Following paper: hidden1_dim=32, hidden2_dim=16
-            hidden_dim = 32
-            latent_dim = 16
-            self.vgae = VGAE(input_dim=input_dim, hidden_dim=hidden_dim, latent_dim=latent_dim, dropout=0.0).to(self.device)
+            # Use configured VGAE architecture parameters (per paper: hidden1_dim=32, hidden2_dim=16)
+            self.vgae = VGAE(input_dim=input_dim, hidden_dim=self.vgae_hidden_dim, 
+                            latent_dim=self.vgae_latent_dim, dropout=self.vgae_dropout).to(self.device)
             self.vgae_optimizer = optim.Adam(self.vgae.parameters(), lr=self.vgae_lr)
 
         self.vgae.train()
@@ -599,7 +629,8 @@ class AttackerClient(Client):
         
         # Compute proxy loss F'(w'_j(t)) using the proxy loader
         # This approximates the global loss when the malicious update is aggregated
-        proxy_loss = self._proxy_global_loss(malicious_update, max_batches=3, skip_dim_check=False)
+        # Use optimization max_batches for consistency (this method may be used in optimization context)
+        proxy_loss = self._proxy_global_loss(malicious_update, max_batches=self.proxy_max_batches_opt, skip_dim_check=False)
         
         # Note: The full formulation would require computing F(w_i(t)) for each benign client,
         # but for optimization purposes, we use the proxy loss as an approximation.
@@ -705,7 +736,7 @@ class AttackerClient(Client):
         # If F_recon has only one row, add small client-specific perturbation to ensure diversity
         # This prevents multiple attackers from generating identical attacks
         if F_recon_rows == 1:
-            perturbation_scale = 0.01 * (self.client_id + 1)  # Scale based on client_id
+            perturbation_scale = self.gsp_perturbation_scale * (self.client_id + 1)  # Scale based on client_id
             perturbation = torch.randn_like(gsp_attack) * perturbation_scale
             gsp_attack = gsp_attack + perturbation
         
@@ -859,12 +890,11 @@ class AttackerClient(Client):
         # STEP 7: Optimize w'_j(t) to maximize F(w'_g(t))
         # According to paper Equation 12, we maximize F(w'_g(t)) subject to constraints
         # ============================================================
-        proxy_steps = 20  # Increased for better convergence
         proxy_lr = self.proxy_step
         # Add small client-specific perturbation to initial malicious_update to ensure diversity
         # This helps different attackers converge to different local optima
         if self.is_attacker:
-            perturbation_scale = 0.001 * (self.client_id + 1)  # Small scale, client-specific
+            perturbation_scale = self.opt_init_perturbation_scale * (self.client_id + 1)  # Small scale, client-specific
             initial_perturbation = torch.randn_like(malicious_update) * perturbation_scale
             proxy_param = (malicious_update + initial_perturbation).clone().detach().to(self.device)
         else:
@@ -876,12 +906,13 @@ class AttackerClient(Client):
         proxy_param_flat = proxy_param.view(-1)
         dim_valid = int(proxy_param_flat.numel()) == self._flat_numel
         
-        for step in range(proxy_steps):
+        for step in range(self.proxy_steps):
             proxy_opt.zero_grad()
             
             # Attack objective: Maximize F(w'_g(t)) according to paper Formula 4a
             # We use proxy loss as approximation of F(w'_g(t))
-            global_loss = self._proxy_global_loss(proxy_param, max_batches=2, skip_dim_check=dim_valid)
+            # Use optimization max_batches for fast but accurate gradient estimation
+            global_loss = self._proxy_global_loss(proxy_param, max_batches=self.proxy_max_batches_opt, skip_dim_check=dim_valid)
             
             # Objective: maximize global_loss => minimize -global_loss
             objective = -global_loss
@@ -910,7 +941,7 @@ class AttackerClient(Client):
             objective.backward()
             
             # Gradient clipping to prevent explosion
-            torch.nn.utils.clip_grad_norm_([proxy_param], max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_([proxy_param], max_norm=self.grad_clip_norm)
             
             proxy_opt.step()
             
@@ -943,7 +974,8 @@ class AttackerClient(Client):
                       f"scaled from {dist_to_global:.4f} to {final_norm:.4f}")
         
         # Compute final attack objective value for logging
-        final_global_loss = self._proxy_global_loss(malicious_update, max_batches=1, skip_dim_check=False)
+        # Use evaluation max_batches for more accurate final assessment
+        final_global_loss = self._proxy_global_loss(malicious_update, max_batches=self.proxy_max_batches_eval, skip_dim_check=False)
         
         # Compute constraint (4c) for logging
         constraint_c_value = torch.tensor(0.0, device=self.device)

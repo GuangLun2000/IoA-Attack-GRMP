@@ -14,7 +14,8 @@ class Server:
     """Server class for federated learning with GRMP attack defense"""
     def __init__(self, global_model: nn.Module, test_loader,
                 defense_threshold=0.4, total_rounds=20, server_lr=0.8, tolerance_factor=2,
-                d_T=0.5, gamma=10.0, similarity_alpha=0.7):
+                d_T=0.5, gamma=10.0, similarity_alpha=0.7,
+                defense_high_rejection_threshold=0.4, defense_threshold_decay=0.9):
         self.global_model = copy.deepcopy(global_model)
         self.test_loader = test_loader
         self.defense_threshold = defense_threshold
@@ -32,6 +33,10 @@ class Server:
         self.d_T = d_T  # Distance threshold for constraint (4b)
         self.gamma = gamma  # Upper bound for constraint (4c)
         self.similarity_alpha = similarity_alpha  # Weight for pairwise similarities
+        
+        # Adaptive defense parameters
+        self.defense_high_rejection_threshold = defense_high_rejection_threshold  # High rejection rate threshold
+        self.defense_threshold_decay = defense_threshold_decay  # Threshold decay factor
 
         # Track historical data for adaptive adjustments
         self.history = {
@@ -133,8 +138,8 @@ class Server:
         # Adaptive adjustment: If rejection rates are too high, further lower the threshold
         if len(self.history['rejection_rates']) > 0:
             recent_rejection_rate = np.mean(self.history['rejection_rates'][-3:])
-            if recent_rejection_rate > 0.4:  # If more than 40% are rejected
-                dynamic_threshold *= 0.9  # Reduce threshold by 10%
+            if recent_rejection_rate > self.defense_high_rejection_threshold:
+                dynamic_threshold *= self.defense_threshold_decay
                 print(f"  ⚠️ High rejection rate detected. Lowering threshold to: {dynamic_threshold:.3f}")
 
         accepted_indices = []
