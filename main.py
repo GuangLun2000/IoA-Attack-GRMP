@@ -364,12 +364,12 @@ def main():
         'seed': 42,  # Random seed for reproducibility (int)
         
         # ========== Federated Learning Setup ==========
-        'num_clients': 6,  # Total number of federated learning clients (int)
-        'num_attackers': 2,  # Number of attacker clients (int, must be < num_clients)
+        'num_clients': 4,  # Total number of federated learning clients (int)
+        'num_attackers': 0,  # Number of attacker clients (int, must be < num_clients)
         'num_benign_clients': None,  # Optional: Explicit number of benign clients for baseline experiment
                                      # If None, baseline will use (num_clients - num_attackers) to ensure fair comparison
                                      # If set, baseline experiment will use exactly this many benign clients
-        'num_rounds': 50,  # Total number of federated learning rounds (int)
+        'num_rounds': 10,  # Total number of federated learning rounds (int)
         
         # ========== Training Hyperparameters ==========
         'client_lr': 2e-5,  # Learning rate for local client training (float)
