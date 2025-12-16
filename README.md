@@ -49,11 +49,12 @@ python main.py
 
 **Option 2: Interactive Notebook (Recommended for configuration changes)**
 1. Open `GRMP_Attack_Colab.ipynb` in Google Colab
-2. Upload all Python files (main.py, client.py, server.py, data_loader.py, models.py, visualization.py)
-3. Enable GPU: Runtime → Change runtime type → GPU
-4. Run all cells: Runtime → Run all
+2. Enable GPU: Runtime → Change runtime type → GPU
+3. Run all cells: Runtime → Run all
 
 ## Citation
+
+If this repository has been helpful to you, please consider citing our work in your paper. Thank you so much!
 
 ```latex
 @article{cai2025graph,
