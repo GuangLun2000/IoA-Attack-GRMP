@@ -51,7 +51,9 @@ class Client:
     def reset_optimizer(self):
         """Reset the optimizer. Only valid when model is on GPU."""
         if self._model_on_gpu:
-            self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
+            # Only optimize trainable parameters (important for LoRA)
+            trainable_params = [p for p in self.model.parameters() if p.requires_grad]
+            self.optimizer = optim.Adam(trainable_params, lr=self.lr)
         else:
             self.optimizer = None
 
@@ -107,8 +109,10 @@ class BenignClient(Client):
             self.model.to(self.device)
             self._model_on_gpu = True
             # Create optimizer when model is on GPU
+            # Only optimize trainable parameters (important for LoRA)
             if self.optimizer is None:
-                self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
+                trainable_params = [p for p in self.model.parameters() if p.requires_grad]
+                self.optimizer = optim.Adam(trainable_params, lr=self.lr)
         
         self.model.train()
         # Get initial params and move to CPU to save GPU memory
@@ -266,6 +270,27 @@ class AttackerClient(Client):
         self.global_model_params = None  # Store global model params for constraint (4b) (will be on GPU when needed)
         # Get model parameter count (works on CPU model)
         self._flat_numel = int(self.model.get_flat_params().numel())  # Convert to Python int
+        
+        # Validate and adjust dim_reduction_size for LoRA mode
+        # In LoRA mode, if dim_reduction_size > actual LoRA params, use all LoRA params
+        # Rationale: When LoRA params are already small, using all of them is more reasonable
+        # than further reducing, as it preserves information and the computation is still feasible.
+        use_lora = hasattr(self.model, 'use_lora') and self.model.use_lora
+        if use_lora:
+            actual_lora_params = self._flat_numel
+            if dim_reduction_size > actual_lora_params:
+                # Auto-adjust: use all LoRA params (no further reduction needed)
+                # When LoRA params are already small, using all of them is reasonable
+                # and preserves more information for VGAE training
+                print(f"    [Attacker {self.client_id}] Info: dim_reduction_size ({dim_reduction_size}) > LoRA params ({actual_lora_params})")
+                print(f"    [Attacker {self.client_id}] Auto-adjusting dim_reduction_size to {actual_lora_params} (using all LoRA params)")
+                self.dim_reduction_size = actual_lora_params
+            elif dim_reduction_size == actual_lora_params:
+                # Use all parameters (no reduction), which is fine
+                pass
+            else:
+                # dim_reduction_size < actual_lora_params, which is the normal case (with reduction)
+                pass
 
     def prepare_for_round(self, round_num: int):
         """Prepare for a new training round."""
@@ -481,23 +506,81 @@ class AttackerClient(Client):
         """
         Convert flat tensor to param dict for stateless.functional_call.
         
+        In LoRA mode, only sets LoRA parameters (trainable parameters).
+        In full fine-tuning mode, sets all parameters.
+        
+        Important: Handles PEFT model parameter name compatibility.
+        PEFT models have nested structure (base_model.model.*), and stateless.functional_call
+        may need specific parameter name formats.
+        
         Args:
-            flat_params: Flattened parameter tensor
+            flat_params: Flattened parameter tensor (LoRA params in LoRA mode, all params in full mode)
             skip_dim_check: If True, skip dimension check (for performance in loops)
+        
+        Returns:
+            Dictionary mapping parameter names to tensors, compatible with stateless.functional_call
         """
         param_dict = {}
         offset = 0
         flat_params = flat_params.view(-1)  # Ensure 1D (O(1), just view change)
         total_numel = int(flat_params.numel())  # Convert to Python int
         
+        # Check if model is in LoRA mode
+        use_lora = hasattr(self.model, 'use_lora') and self.model.use_lora
+        
+        # Build a mapping from parameter objects to their names
+        # This is more efficient than searching each time
+        param_to_name = {}
         for name, param in self.model.named_parameters():
+            # In LoRA mode, only track trainable parameters
+            if use_lora:
+                if param.requires_grad:
+                    param_to_name[param] = name
+            else:
+                # Full fine-tuning: track all parameters
+                param_to_name[param] = name
+        
+        # Iterate through parameters in the same order as get_flat_params
+        for param in self.model.parameters():
+            # In LoRA mode, skip non-trainable parameters
+            if use_lora and not param.requires_grad:
+                continue
+            
+            # Get parameter name from pre-built mapping
+            param_name = param_to_name.get(param)
+            if param_name is None:
+                # Parameter not in mapping (shouldn't happen, but handle gracefully)
+                continue
+            
             numel = int(param.numel())  # Convert to Python int
             if not skip_dim_check and offset + numel > total_numel:
                 # Dimension mismatch: return empty dict to avoid errors
-                print(f"    [Attacker {self.client_id}] Param dict dimension mismatch at {name}: offset {offset} + numel {numel} > total {total_numel}")
+                print(f"    [Attacker {self.client_id}] Param dict dimension mismatch: offset {offset} + numel {numel} > total {total_numel}")
                 return {}
-            param_dict[name] = flat_params[offset:offset + numel].view_as(param)
+            
+            # For PEFT models, stateless.functional_call expects parameter names
+            # that match the actual model structure. The names from named_parameters()
+            # should already be correct, but we verify compatibility.
+            param_value = flat_params[offset:offset + numel].view_as(param)
+            
+            # Handle PEFT model parameter names (base_model.model.* format)
+            # stateless.functional_call should work with the names as-is from named_parameters()
+            # But if we're working with a PEFT-wrapped model, ensure the name is correct
+            if use_lora and hasattr(self.model, 'model') and hasattr(self.model.model, 'base_model'):
+                # This is a PEFT model - parameter names should already include base_model.model prefix
+                # from named_parameters(), so use as-is
+                param_dict[param_name] = param_value
+            else:
+                # Standard model or direct PEFT model access
+                param_dict[param_name] = param_value
+            
             offset += numel
+        
+        # Verify we used all parameters
+        if not skip_dim_check and offset != total_numel:
+            print(f"    [Attacker {self.client_id}] Param dict size mismatch: used {offset} params, provided {total_numel}")
+            # This could indicate a serious problem - log warning but continue
+        
         return param_dict
 
     def _proxy_global_loss(self, malicious_update: torch.Tensor, max_batches: int = 1, 
@@ -546,12 +629,42 @@ class AttackerClient(Client):
                 attention_mask = batch['attention_mask'].to(self.device)
                 labels = batch['labels'].to(self.device)
 
-                logits = stateless.functional_call(
-                    self.model,
-                    param_dict,
-                    args=(),
-                    kwargs={'input_ids': input_ids, 'attention_mask': attention_mask}
-                )
+                # Use stateless.functional_call with error handling for PEFT compatibility
+                try:
+                    logits = stateless.functional_call(
+                        self.model,
+                        param_dict,
+                        args=(),
+                        kwargs={'input_ids': input_ids, 'attention_mask': attention_mask}
+                    )
+                except (RuntimeError, KeyError) as e:
+                    # If stateless.functional_call fails (e.g., parameter name mismatch in PEFT),
+                    # try using the model directly with temporarily set parameters
+                    # This is a fallback for PEFT model compatibility
+                    print(f"    [Attacker {self.client_id}] Warning: stateless.functional_call failed: {e}")
+                    print(f"    [Attacker {self.client_id}] Attempting fallback method...")
+                    
+                    # Fallback: temporarily set parameters, run forward, then restore
+                    original_params = {}
+                    try:
+                        # Save original parameters
+                        for name, param in self.model.named_parameters():
+                            if name in param_dict:
+                                original_params[name] = param.data.clone()
+                                param.data.copy_(param_dict[name])
+                        
+                        # Run forward pass
+                        # NewsClassifierModel.forward() returns logits directly
+                        logits = self.model(input_ids=input_ids, attention_mask=attention_mask)
+                        
+                        # Restore original parameters
+                        for name, param in self.model.named_parameters():
+                            if name in original_params:
+                                param.data.copy_(original_params[name])
+                    except Exception as fallback_error:
+                        print(f"    [Attacker {self.client_id}] Fallback method also failed: {fallback_error}")
+                        # Return zero loss as last resort
+                        return torch.tensor(0.0, device=self.device)
 
                 ce_loss = F.cross_entropy(logits, labels)
                 total_loss = total_loss + ce_loss

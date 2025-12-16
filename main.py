@@ -115,8 +115,25 @@ def setup_experiment(config):
     test_loader = data_manager.get_test_loader()
 
     # 4. Initialize Global Model
-    print("Initializing global model (DistilBERT)...")
-    global_model = NewsClassifierModel()
+    use_lora = config.get('use_lora', False)
+    if use_lora:
+        print("Initializing global model (DistilBERT) with LoRA...")
+        global_model = NewsClassifierModel(
+            model_name=config.get('model_name', 'distilbert-base-uncased'),
+            num_labels=config.get('num_labels', 4),
+            use_lora=True,
+            lora_r=config.get('lora_r', 16),
+            lora_alpha=config.get('lora_alpha', 32),
+            lora_dropout=config.get('lora_dropout', 0.1),
+            lora_target_modules=config.get('lora_target_modules', None)
+        )
+    else:
+        print("Initializing global model (DistilBERT) [Full Fine-tuning]...")
+        global_model = NewsClassifierModel(
+            model_name=config.get('model_name', 'distilbert-base-uncased'),
+            num_labels=config.get('num_labels', 4),
+            use_lora=False
+        )
 
     # 5. Initialize Server
     server = Server(
@@ -371,6 +388,17 @@ def main():
                                      # If set, baseline experiment will use exactly this many benign clients
         'num_rounds': 50,  # Total number of federated learning rounds (int)
         
+        # ========== Training Mode Configuration ==========
+        'use_lora': False,  # True for LoRA fine-tuning, False for full fine-tuning
+        # LoRA parameters (only used when use_lora=True)
+        'lora_r': 16,  # LoRA rank (controls the rank of low-rank matrices)
+        'lora_alpha': 32,  # LoRA alpha (scaling factor, typically 2*r)
+        'lora_dropout': 0.1,  # LoRA dropout rate
+        'lora_target_modules': None,  # None = use default for DistilBERT (["q_lin", "k_lin", "v_lin", "out_lin"])
+        # Model configuration
+        'model_name': 'distilbert-base-uncased',  # Model name or path
+        'num_labels': 4,  # Number of classification labels
+        
         # ========== Training Hyperparameters ==========
         'client_lr': 2e-5,  # Learning rate for local client training (float)
         'server_lr': 1.0,  # Server learning rate for model aggregation (fixed at 1.0)
@@ -394,7 +422,11 @@ def main():
         
         # ========== VGAE Training Parameters ==========
         # Reference paper: input_dim=5, hidden1_dim=32, hidden2_dim=16, num_epoch=10, lr=0.01
-        'dim_reduction_size': 10000,  # Reduced dimensionality of LLM parameters
+        # Note: dim_reduction_size should be <= total trainable parameters
+        # - Full fine-tuning: ~67M parameters, dim_reduction_size=10000 is fine
+        # - LoRA (r=16): ~0.5-1M parameters, dim_reduction_size will be auto-adjusted if > LoRA params
+        # Auto-adjustment: If dim_reduction_size > actual LoRA params, it will be set to 80% of LoRA params
+        'dim_reduction_size': 10000,  # Reduced dimensionality of LLM parameters (auto-adjusted for LoRA if needed)
         'vgae_epochs': 10,  # Number of epochs for VGAE training (reference: 10)
         'vgae_lr': 0.01,  # Learning rate for VGAE optimizer (reference: 0.01)
         'vgae_hidden_dim': 32,  # VGAE hidden layer dimension (per paper: hidden1_dim=32)
