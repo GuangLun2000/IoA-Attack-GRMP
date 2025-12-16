@@ -365,25 +365,25 @@ def main():
         
         # ========== Federated Learning Setup ==========
         'num_clients': 4,  # Total number of federated learning clients (int)
-        'num_attackers': 0,  # Number of attacker clients (int, must be < num_clients)
+        'num_attackers': 2,  # Number of attacker clients (int, must be < num_clients)
         'num_benign_clients': None,  # Optional: Explicit number of benign clients for baseline experiment
                                      # If None, baseline will use (num_clients - num_attackers) to ensure fair comparison
                                      # If set, baseline experiment will use exactly this many benign clients
-        'num_rounds': 10,  # Total number of federated learning rounds (int)
+        'num_rounds': 50,  # Total number of federated learning rounds (int)
         
         # ========== Training Hyperparameters ==========
         'client_lr': 2e-5,  # Learning rate for local client training (float)
         'server_lr': 1.0,  # Server learning rate for model aggregation (fixed at 1.0)
         'batch_size': 128,  # Batch size for local training (int)
-        'test_batch_size': 128,  # Batch size for test/validation data loaders (int)
+        'test_batch_size': 512,  # Batch size for test/validation data loaders (int)
         
-        'local_epochs': 2,  # Number of local training epochs per round (int, per paper Section IV)
+        'local_epochs': 5,  # Number of local training epochs per round (int, per paper Section IV)
         'alpha': 0.05,  # Proximal regularization coefficient α ∈ [0,1] from paper formula (1) (float)
         
         # ========== Data Distribution ==========
         'dirichlet_alpha': 0.3,  # Make data less extreme non-IID (higher alpha = more balanced)
         # 'dataset_size_limit': None,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
-        'dataset_size_limit': 10000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
+        'dataset_size_limit': 20000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
 
         # ========== Attack Configuration ==========
         'attack_start_round': 0,  # Round when attack phase starts (int, now all rounds use complete poisoning)
