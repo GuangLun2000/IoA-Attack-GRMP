@@ -41,7 +41,12 @@ class Client:
         self.lr = lr
         self.local_epochs = local_epochs
         self.alpha = alpha  # Regularization coefficient α ∈ [0,1] from paper formula (1)
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        # CRITICAL: Use explicit cuda:0 instead of 'cuda' to ensure device consistency
+        # This prevents issues where 'cuda' and 'cuda:0' are treated as different devices
+        if torch.cuda.is_available():
+            self.device = torch.device('cuda:0')
+        else:
+            self.device = torch.device('cpu')
         # Do NOT move model to GPU here - will be moved on-demand
         self.optimizer = None  # Will be created when needed
         self.current_round = 0
@@ -592,6 +597,29 @@ class AttackerClient(Client):
         
         return param_dict
 
+    def _device_matches(self, device1, device2):
+        """
+        Check if two devices are the same, handling 'cuda' vs 'cuda:0' equivalence.
+        
+        Args:
+            device1: First device
+            device2: Second device
+        
+        Returns:
+            True if devices are the same, False otherwise
+        """
+        # Convert to string and normalize
+        d1_str = str(device1)
+        d2_str = str(device2)
+        
+        # Normalize 'cuda' to 'cuda:0'
+        if d1_str == 'cuda':
+            d1_str = 'cuda:0'
+        if d2_str == 'cuda':
+            d2_str = 'cuda:0'
+        
+        return d1_str == d2_str
+
     def _ensure_model_on_device(self, module, device):
         """
         Recursively ensure ALL parameters and buffers of a module are on the specified device.
@@ -599,21 +627,32 @@ class AttackerClient(Client):
         
         Args:
             module: The module to move
-            device: Target device
+            device: Target device (will be normalized to 'cuda:0' if it's 'cuda')
         """
+        # Normalize device: always use 'cuda:0' instead of 'cuda' for consistency
+        device_str = str(device)
+        if device_str == 'cuda':
+            target_device = torch.device('cuda:0')
+        elif device_str.startswith('cuda'):
+            target_device = torch.device(device_str if ':' in device_str else 'cuda:0')
+        else:
+            target_device = device
+        
         # Use named_parameters to get all parameters including nested ones
         for name, param in module.named_parameters(recurse=False):
-            if param.device != device:
+            if not self._device_matches(param.device, target_device):
                 # Force move by creating new tensor on target device
                 with torch.no_grad():
-                    param.data = param.data.to(device, non_blocking=True)
+                    param.data = param.data.to(target_device, non_blocking=True)
+        
         for name, buffer in module.named_buffers(recurse=False):
-            if buffer.device != device:
+            if not self._device_matches(buffer.device, target_device):
                 # Force move buffer
-                buffer.data = buffer.data.to(device, non_blocking=True)
+                buffer.data = buffer.data.to(target_device, non_blocking=True)
+        
         # Recursively process all child modules
         for child in module.children():
-            self._ensure_model_on_device(child, device)
+            self._ensure_model_on_device(child, target_device)
 
     def _proxy_global_loss(self, malicious_update: torch.Tensor, max_batches: int = 1, 
                            skip_dim_check: bool = False) -> torch.Tensor:
@@ -631,9 +670,12 @@ class AttackerClient(Client):
         if self.global_model_params is None or self.proxy_loader is None:
             return torch.tensor(0.0, device=self.device)
 
+        # Normalize device: always use 'cuda:0' for consistency
+        target_device = torch.device('cuda:0') if self.device.type == 'cuda' else self.device
+        
         # Ensure malicious_update is on GPU for computation
         if malicious_update.device.type != 'cuda':
-            malicious_update = malicious_update.to(self.device)
+            malicious_update = malicious_update.to(target_device)
         
         # Ensure shapes match: flatten to 1D and check dimension
         malicious_update = malicious_update.view(-1)  # Flatten to 1D (O(1), just view change)
@@ -643,27 +685,31 @@ class AttackerClient(Client):
             return torch.tensor(0.0, device=self.device)
 
         # Move model to GPU temporarily for proxy loss calculation
+        # Normalize device: always use 'cuda:0' for consistency
+        target_device = torch.device('cuda:0') if self.device.type == 'cuda' else self.device
+        
         model_was_on_cpu = not self._model_on_gpu
         if model_was_on_cpu:
             # Move entire model to device (including all parameters and buffers)
             # For PEFT models, this should move base model, LoRA parameters, and all buffers
-            self.model.to(self.device)
+            self.model.to(target_device)
             
             # CRITICAL FIX for PEFT models: Recursively ensure ALL parameters and buffers are on GPU
             # This is necessary because PEFT models have nested structures that .to() might not handle correctly
-            self._ensure_model_on_device(self.model, self.device)
+            self._ensure_model_on_device(self.model, target_device)
             
             # Double-check: Verify ALL parameters and buffers are actually on GPU
-            # This is especially critical for PEFT models
+            # Use normalized device: always use 'cuda:0' for consistency
+            target_device = torch.device('cuda:0') if self.device.type == 'cuda' else self.device
             for name, param in self.model.named_parameters():
-                if param.device != self.device:
-                    print(f"    [Attacker {self.client_id}] ERROR: Parameter {name} still on {param.device}, forcing move to {self.device}")
+                if not self._device_matches(param.device, target_device):
+                    print(f"    [Attacker {self.client_id}] ERROR: Parameter {name} on {param.device}, moving to {target_device}")
                     with torch.no_grad():
-                        param.data = param.data.to(self.device, non_blocking=True)
+                        param.data = param.data.to(target_device, non_blocking=True)
             for name, buffer in self.model.named_buffers():
-                if buffer.device != self.device:
-                    print(f"    [Attacker {self.client_id}] ERROR: Buffer {name} still on {buffer.device}, forcing move to {self.device}")
-                    buffer.data = buffer.data.to(self.device, non_blocking=True)
+                if not self._device_matches(buffer.device, target_device):
+                    print(f"    [Attacker {self.client_id}] ERROR: Buffer {name} on {buffer.device}, moving to {target_device}")
+                    buffer.data = buffer.data.to(target_device, non_blocking=True)
             
             self._model_on_gpu = True
 
@@ -673,57 +719,115 @@ class AttackerClient(Client):
             param_dict = self._flat_to_param_dict(candidate_params, skip_dim_check=skip_dim_check)
             
             # CRITICAL FIX: Ensure all parameters in param_dict are on the correct device
-            # This is essential for PEFT models where base model params must be on GPU
-            # even though they're not in param_dict (for LoRA mode)
+            # Normalize device: always use 'cuda:0' for consistency
+            target_device = torch.device('cuda:0') if self.device.type == 'cuda' else self.device
             for name, value in param_dict.items():
-                if value.device != self.device:
-                    param_dict[name] = value.to(self.device, non_blocking=True)
+                if not self._device_matches(value.device, target_device):
+                    param_dict[name] = value.to(target_device, non_blocking=True)
             
             # EXTRA SAFETY: Before using stateless.functional_call, verify model is completely on GPU
+            # Normalize device: always use 'cuda:0' for consistency
+            target_device = torch.device('cuda:0') if self.device.type == 'cuda' else self.device
             # Check a sample of parameters to ensure the model is really on GPU
-            sample_param = next(iter(self.model.parameters()))
-            if sample_param.device != self.device:
-                print(f"    [Attacker {self.client_id}] CRITICAL: Model not fully on {self.device}, forcing move")
-                self.model.to(self.device)
-                self._ensure_model_on_device(self.model, self.device)
+            try:
+                sample_param = next(iter(self.model.parameters()))
+                if not self._device_matches(sample_param.device, target_device):
+                    print(f"    [Attacker {self.client_id}] CRITICAL: Model not fully on {target_device}, forcing move")
+                    self.model.to(target_device)
+                    self._ensure_model_on_device(self.model, target_device)
+            except StopIteration:
+                pass
 
             total_loss = 0.0
             batches = 0
 
+            # Normalize device once for this batch loop
+            target_device = torch.device('cuda:0') if self.device.type == 'cuda' else self.device
+            
             for batch in self.proxy_loader:
-                input_ids = batch['input_ids'].to(self.device)
-                attention_mask = batch['attention_mask'].to(self.device)
-                labels = batch['labels'].to(self.device)
+                input_ids = batch['input_ids'].to(target_device)
+                attention_mask = batch['attention_mask'].to(target_device)
+                labels = batch['labels'].to(target_device)
 
-                # Use stateless.functional_call with error handling for PEFT compatibility
-                try:
-                    # CRITICAL: For PEFT models, stateless.functional_call only replaces the parameters
-                    # we provide, but base model parameters must also be on GPU
-                    # Final verification before calling stateless.functional_call
-                    # Ensure ALL model parameters (including base model) are on GPU
-                    self._ensure_model_on_device(self.model, self.device)
-                    
-                    # Final check: verify every single parameter is on the correct device
-                    # This is critical for PEFT models
-                    device_mismatch_found = False
-                    for name, param in self.model.named_parameters():
-                        if param.device != self.device:
-                            print(f"    [Attacker {self.client_id}] CRITICAL PRE-CALL: Parameter {name} on {param.device}, forcing to {self.device}")
-                            with torch.no_grad():
-                                param.data = param.data.to(self.device, non_blocking=True)
-                            device_mismatch_found = True
-                    if device_mismatch_found:
-                        print(f"    [Attacker {self.client_id}] WARNING: Found device mismatches, fixed them before stateless.functional_call")
-                    
-                    # Use stateless.functional_call
-                    # For PEFT models, this will use param_dict for LoRA params and base model params from the model
-                    logits = stateless.functional_call(
-                        self.model,
-                        param_dict,
-                        args=(),
-                        kwargs={'input_ids': input_ids, 'attention_mask': attention_mask}
-                    )
-                except (RuntimeError, KeyError) as e:
+                # CRITICAL FIX: For LoRA/PEFT models, stateless.functional_call has device issues
+                # Use direct parameter setting method instead, which gives us full control over devices
+                use_lora = hasattr(self.model, 'use_lora') and self.model.use_lora
+                
+                if use_lora:
+                    # For LoRA models, use fallback method directly to avoid stateless.functional_call device issues
+                    logits = None
+                    original_params = {}
+                    try:
+                        # CRITICAL: First ensure ALL parameters (including base model) are on target device
+                        # This must be done BEFORE setting LoRA parameters
+                        self.model.to(target_device)
+                        self._ensure_model_on_device(self.model, target_device)
+                        
+                        # Verify all parameters are on correct device before setting new values
+                        for name, param in self.model.named_parameters():
+                            if not self._device_matches(param.device, target_device):
+                                with torch.no_grad():
+                                    param.data = param.data.to(target_device, non_blocking=True)
+                        
+                        # Verify all buffers are on correct device
+                        for name, buffer in self.model.named_buffers():
+                            if not self._device_matches(buffer.device, target_device):
+                                buffer.data = buffer.data.to(target_device, non_blocking=True)
+                        
+                        # Now save original parameters and set new values (only LoRA params)
+                        for name, param in self.model.named_parameters():
+                            if name in param_dict:
+                                # Save original parameter value
+                                original_params[name] = param.data.clone()
+                                # Get new parameter value from param_dict
+                                new_value = param_dict[name]
+                                # Ensure new_value is on target_device
+                                if not self._device_matches(new_value.device, target_device):
+                                    new_value = new_value.to(target_device, non_blocking=True)
+                                # Ensure data type matches
+                                if new_value.dtype != param.dtype:
+                                    new_value = new_value.to(dtype=param.dtype)
+                                # Copy the value
+                                param.data.copy_(new_value)
+                        
+                        # Final check: ensure all parameters are still on correct device after setting
+                        self._ensure_model_on_device(self.model, target_device)
+                        
+                        # Run forward pass
+                        logits = self.model(input_ids=input_ids, attention_mask=attention_mask)
+                        
+                        # Restore original parameters
+                        for name, param in self.model.named_parameters():
+                            if name in original_params:
+                                restored_value = original_params[name]
+                                if not self._device_matches(restored_value.device, target_device):
+                                    restored_value = restored_value.to(target_device, non_blocking=True)
+                                param.data.copy_(restored_value)
+                    except Exception as fallback_error:
+                        print(f"    [Attacker {self.client_id}] LoRA fallback method failed: {fallback_error}")
+                        # Restore parameters even if forward failed
+                        for name, param in self.model.named_parameters():
+                            if name in original_params:
+                                restored_value = original_params[name]
+                                if not self._device_matches(restored_value.device, target_device):
+                                    restored_value = restored_value.to(target_device, non_blocking=True)
+                                param.data.copy_(restored_value)
+                        raise
+                
+                else:
+                    # For full fine-tuning, try stateless.functional_call first
+                    try:
+                        # Final verification before calling stateless.functional_call
+                        self._ensure_model_on_device(self.model, target_device)
+                        self.model.to(target_device)
+                        
+                        logits = stateless.functional_call(
+                            self.model,
+                            param_dict,
+                            args=(),
+                            kwargs={'input_ids': input_ids, 'attention_mask': attention_mask}
+                        )
+                    except (RuntimeError, KeyError) as e:
                     # If stateless.functional_call fails (e.g., parameter name mismatch in PEFT),
                     # try using the model directly with temporarily set parameters
                     # This is a fallback for PEFT model compatibility
@@ -733,26 +837,35 @@ class AttackerClient(Client):
                     # Fallback: temporarily set parameters, run forward, then restore
                     original_params = {}
                     try:
+                        # Use normalized device for consistency: always use 'cuda:0'
+                        target_device = torch.device('cuda:0') if self.device.type == 'cuda' else self.device
+                        
                         # First, ensure entire model is on correct device (defensive check)
                         # This is critical for PEFT models where base model params might not be properly moved
-                        self.model.to(self.device)
+                        self.model.to(target_device)
                         
                         # CRITICAL: Recursively ensure ALL parameters and buffers are on GPU
                         # This is essential for PEFT models with nested structures
-                        self._ensure_model_on_device(self.model, self.device)
+                        self._ensure_model_on_device(self.model, target_device)
+                        
+                        # Ensure model is on target device first
+                        self.model.to(target_device)
                         
                         # Verify ALL parameters are on GPU before proceeding
                         for name, param in self.model.named_parameters():
-                            if param.device != self.device:
-                                print(f"    [Attacker {self.client_id}] CRITICAL in fallback: Parameter {name} on {param.device}, forcing to {self.device}")
+                            if not self._device_matches(param.device, target_device):
+                                print(f"    [Attacker {self.client_id}] CRITICAL in fallback: Parameter {name} on {param.device}, forcing to {target_device}")
                                 with torch.no_grad():
-                                    param.data = param.data.to(self.device, non_blocking=True)
+                                    param.data = param.data.to(target_device, non_blocking=True)
                         
                         # Verify ALL buffers are on GPU
                         for name, buffer in self.model.named_buffers():
-                            if buffer.device != self.device:
-                                print(f"    [Attacker {self.client_id}] CRITICAL in fallback: Buffer {name} on {buffer.device}, forcing to {self.device}")
-                                buffer.data = buffer.data.to(self.device, non_blocking=True)
+                            if not self._device_matches(buffer.device, target_device):
+                                print(f"    [Attacker {self.client_id}] CRITICAL in fallback: Buffer {name} on {buffer.device}, forcing to {target_device}")
+                                buffer.data = buffer.data.to(target_device, non_blocking=True)
+                        
+                        # One more recursive check
+                        self._ensure_model_on_device(self.model, target_device)
                         
                         # Save original parameters and set new values
                         # Critical: Ensure all parameters are on the correct device before setting
@@ -762,10 +875,14 @@ class AttackerClient(Client):
                                 original_params[name] = param.data.clone()
                                 # Get new parameter value from param_dict
                                 new_value = param_dict[name]
-                                # Ensure new_value is on the same device as param
-                                # This is critical for PEFT models where base model params may be on different devices
-                                if new_value.device != param.device:
-                                    new_value = new_value.to(param.device, non_blocking=True)
+                                # Ensure new_value and param are both on target_device
+                                # Use normalized device matching to handle 'cuda' vs 'cuda:0'
+                                if not self._device_matches(new_value.device, target_device):
+                                    new_value = new_value.to(target_device, non_blocking=True)
+                                # Ensure param is also on target_device
+                                if not self._device_matches(param.device, target_device):
+                                    with torch.no_grad():
+                                        param.data = param.data.to(target_device, non_blocking=True)
                                 # Ensure data type matches
                                 if new_value.dtype != param.dtype:
                                     new_value = new_value.to(dtype=param.dtype)
@@ -774,15 +891,25 @@ class AttackerClient(Client):
                         
                         # Final verification: ensure all parameters and buffers are on correct device
                         # This is especially important for PEFT models with nested structures
-                        # Double-check with recursive function
-                        self._ensure_model_on_device(self.model, self.device)
+                        # Double-check with recursive function (use normalized device)
+                        target_device = torch.device('cuda:0') if self.device.type == 'cuda' else self.device
+                        self._ensure_model_on_device(self.model, target_device)
                         
                         # One more explicit check before forward pass
-                        # This is critical for catching any remaining device mismatches
+                        # Use normalized device: always 'cuda:0' for consistency
+                        target_device = torch.device('cuda:0') if self.device.type == 'cuda' else self.device
                         for name, param in self.model.named_parameters():
-                            if param.device != self.device:
-                                print(f"    [Attacker {self.client_id}] FINAL CHECK FAILED: Parameter {name} on {param.device}")
-                                raise RuntimeError(f"Parameter {name} is on {param.device} but should be on {self.device}")
+                            if not self._device_matches(param.device, target_device):
+                                print(f"    [Attacker {self.client_id}] FINAL CHECK FAILED: Parameter {name} on {param.device}, should be on {target_device}")
+                                # Try one more time to fix it
+                                with torch.no_grad():
+                                    param.data = param.data.to(target_device, non_blocking=True)
+                        
+                        # Final check for buffers
+                        for name, buffer in self.model.named_buffers():
+                            if not self._device_matches(buffer.device, target_device):
+                                print(f"    [Attacker {self.client_id}] FINAL CHECK FAILED: Buffer {name} on {buffer.device}, should be on {target_device}")
+                                buffer.data = buffer.data.to(target_device, non_blocking=True)
                         
                         # Run forward pass
                         # NewsClassifierModel.forward() returns logits directly
@@ -791,10 +918,14 @@ class AttackerClient(Client):
                         # Restore original parameters
                         for name, param in self.model.named_parameters():
                             if name in original_params:
-                                # Ensure restored value is on correct device
+                                # Ensure restored value is on target_device
                                 restored_value = original_params[name]
-                                if restored_value.device != param.device:
-                                    restored_value = restored_value.to(param.device)
+                                if not self._device_matches(restored_value.device, target_device):
+                                    restored_value = restored_value.to(target_device, non_blocking=True)
+                                # Ensure param is also on target_device
+                                if not self._device_matches(param.device, target_device):
+                                    with torch.no_grad():
+                                        param.data = param.data.to(target_device, non_blocking=True)
                                 param.data.copy_(restored_value)
                         
                         # Final check after restoration: ensure all parameters still on correct device

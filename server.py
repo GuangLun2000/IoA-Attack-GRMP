@@ -20,7 +20,12 @@ class Server:
         self.test_loader = test_loader
         self.defense_threshold = defense_threshold
         self.total_rounds = total_rounds
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        # CRITICAL: Use explicit cuda:0 instead of 'cuda' to ensure device consistency
+        # This prevents issues where 'cuda' and 'cuda:0' are treated as different devices
+        if torch.cuda.is_available():
+            self.device = torch.device('cuda:0')
+        else:
+            self.device = torch.device('cpu')
         self.global_model.to(self.device)
         self.clients = []
         self.log_data = []
