@@ -74,10 +74,14 @@ class Client:
         Note: Works on both CPU and GPU models. Returns CPU tensor to save GPU memory.
         """
         current_params = self.model.get_flat_params()
+        # Ensure both tensors are on the same device before subtraction
+        # initial_params is on CPU, so move current_params to CPU
+        if current_params.device.type == 'cuda':
+            current_params = current_params.cpu()
+        # Ensure initial_params is also on CPU (should already be, but double-check)
+        if initial_params.device.type == 'cuda':
+            initial_params = initial_params.cpu()
         update = current_params - initial_params
-        # Move update to CPU to save GPU memory
-        if update.device.type == 'cuda':
-            update = update.cpu()
         return update
 
     def local_train(self, epochs=None) -> torch.Tensor:

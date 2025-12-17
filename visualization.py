@@ -53,6 +53,18 @@ class ExperimentVisualizer:
         for i in range(1, len(clean_acc)):
             acc_diff.append(abs(clean_acc[i] - clean_acc[i-1]))
         
+        # Ensure all arrays have the same length
+        min_len = min(len(rounds), len(clean_acc), len(rejection_rate), len(acc_diff))
+        if min_len == 0:
+            print("  ⚠️  Warning: Figure 3 - No data to plot")
+            return
+        
+        # Truncate all arrays to the same length
+        rounds = rounds[:min_len]
+        clean_acc = clean_acc[:min_len]
+        rejection_rate = rejection_rate[:min_len]
+        acc_diff = acc_diff[:min_len]
+        
         # Validate/pad
         if num_rounds is not None and len(rounds) != num_rounds:
             print(f"  ⚠️  Warning: Figure 3 - Expected {num_rounds} rounds, got {len(rounds)}")
