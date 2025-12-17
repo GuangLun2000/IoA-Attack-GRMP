@@ -592,6 +592,24 @@ class AttackerClient(Client):
         
         return param_dict
 
+    def _ensure_model_on_device(self, module, device):
+        """
+        Recursively ensure ALL parameters and buffers of a module are on the specified device.
+        This is critical for PEFT models with nested structures.
+        
+        Args:
+            module: The module to move
+            device: Target device
+        """
+        for param in module.parameters(recurse=False):
+            if param.device != device:
+                param.data = param.data.to(device)
+        for buffer in module.buffers(recurse=False):
+            if buffer.device != device:
+                buffer.data = buffer.data.to(device)
+        for child in module.children():
+            self._ensure_model_on_device(child, device)
+
     def _proxy_global_loss(self, malicious_update: torch.Tensor, max_batches: int = 1, 
                            skip_dim_check: bool = False) -> torch.Tensor:
         """
@@ -625,23 +643,24 @@ class AttackerClient(Client):
             # Move entire model to device (including all parameters and buffers)
             # For PEFT models, this should move base model, LoRA parameters, and all buffers
             self.model.to(self.device)
-            # Defensive check: Ensure all parameters and buffers are actually on the device
-            # This is critical for PEFT models where nested structures might not move correctly
-            # Check parameters
-            for param in self.model.parameters():
-                if param.device != self.device:
-                    # Force move if not on correct device (shouldn't happen, but safety check)
-                    param.data = param.data.to(self.device)
-            # Check buffers (e.g., batch norm running stats)
-            for buffer in self.model.buffers():
-                if buffer.device != self.device:
-                    buffer.data = buffer.data.to(self.device)
+            
+            # CRITICAL FIX for PEFT models: Recursively ensure ALL parameters and buffers are on GPU
+            # This is necessary because PEFT models have nested structures that .to() might not handle correctly
+            self._ensure_model_on_device(self.model, self.device)
+            
             self._model_on_gpu = True
 
         try:
             candidate_params = self.global_model_params + malicious_update
             # Skip dimension check if already validated (performance optimization)
             param_dict = self._flat_to_param_dict(candidate_params, skip_dim_check=skip_dim_check)
+            
+            # CRITICAL FIX: Ensure all parameters in param_dict are on the correct device
+            # This is essential for PEFT models where base model params must be on GPU
+            # even though they're not in param_dict (for LoRA mode)
+            for name, value in param_dict.items():
+                if value.device != self.device:
+                    param_dict[name] = value.to(self.device)
 
             total_loss = 0.0
             batches = 0
@@ -653,6 +672,9 @@ class AttackerClient(Client):
 
                 # Use stateless.functional_call with error handling for PEFT compatibility
                 try:
+                    # CRITICAL: For PEFT models, stateless.functional_call only replaces the parameters
+                    # we provide, but base model parameters must also be on GPU
+                    # We've already ensured the model is on GPU above, so this should work
                     logits = stateless.functional_call(
                         self.model,
                         param_dict,
@@ -672,6 +694,10 @@ class AttackerClient(Client):
                         # First, ensure entire model is on correct device (defensive check)
                         # This is critical for PEFT models where base model params might not be properly moved
                         self.model.to(self.device)
+                        
+                        # CRITICAL: Recursively ensure ALL parameters and buffers are on GPU
+                        # This is essential for PEFT models with nested structures
+                        self._ensure_model_on_device(self.model, self.device)
                         
                         # Save original parameters and set new values
                         # Critical: Ensure all parameters are on the correct device before setting
@@ -693,15 +719,8 @@ class AttackerClient(Client):
                         
                         # Final verification: ensure all parameters and buffers are on correct device
                         # This is especially important for PEFT models with nested structures
-                        # Parameters
-                        for param in self.model.parameters():
-                            if param.device != self.device:
-                                # This shouldn't happen, but if it does, log a warning
-                                print(f"    [Attacker {self.client_id}] Warning: Parameter on {param.device}, moving to {self.device}")
-                        # Buffers (e.g., batch norm running stats, etc.)
-                        for buffer in self.model.buffers():
-                            if buffer.device != self.device:
-                                buffer.data = buffer.data.to(self.device)
+                        # Double-check with recursive function
+                        self._ensure_model_on_device(self.model, self.device)
                         
                         # Run forward pass
                         # NewsClassifierModel.forward() returns logits directly
@@ -715,6 +734,9 @@ class AttackerClient(Client):
                                 if restored_value.device != param.device:
                                     restored_value = restored_value.to(param.device)
                                 param.data.copy_(restored_value)
+                        
+                        # Final check after restoration: ensure all parameters still on correct device
+                        self._ensure_model_on_device(self.model, self.device)
                     except Exception as fallback_error:
                         print(f"    [Attacker {self.client_id}] Fallback method also failed: {fallback_error}")
                         # Return zero loss as last resort
