@@ -382,14 +382,14 @@ def main():
         
         # ========== Federated Learning Setup ==========
         'num_clients': 6,  # Total number of federated learning clients (int)
-        'num_attackers': 0,  # Number of attacker clients (int, must be < num_clients)
+        'num_attackers': 2,  # Number of attacker clients (int, must be < num_clients)
         'num_benign_clients': None,  # Optional: Explicit number of benign clients for baseline experiment
                                      # If None, baseline will use (num_clients - num_attackers) to ensure fair comparison
                                      # If set, baseline experiment will use exactly this many benign clients
         'num_rounds': 50,  # Total number of federated learning rounds (int)
         
         # ========== Training Mode Configuration ==========
-        'use_lora': False,  # True for LoRA fine-tuning, False for full fine-tuning
+        'use_lora': True,  # True for LoRA fine-tuning, False for full fine-tuning
         # LoRA parameters (only used when use_lora=True)
         'lora_r': 16,  # LoRA rank (controls the rank of low-rank matrices)
         'lora_alpha': 32,  # LoRA alpha (scaling factor, typically 2*r)
