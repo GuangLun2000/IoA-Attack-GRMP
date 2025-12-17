@@ -389,7 +389,7 @@ def main():
         'num_rounds': 50,  # Total number of federated learning rounds (int)
         
         # ========== Training Mode Configuration ==========
-        'use_lora': False,  # True for LoRA fine-tuning, False for full fine-tuning
+        'use_lora': True,  # True for LoRA fine-tuning, False for full fine-tuning
         # LoRA parameters (only used when use_lora=True)
         'lora_r': 16,  # LoRA rank (controls the rank of low-rank matrices)
         'lora_alpha': 32,  # LoRA alpha (scaling factor, typically 2*r)
