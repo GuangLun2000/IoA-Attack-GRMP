@@ -381,18 +381,20 @@ def main():
         'seed': 42,  # Random seed for reproducibility (int)
         
         # ========== Federated Learning Setup ==========
-        'num_clients': 6,  # Total number of federated learning clients (int)
-        'num_attackers': 2,  # Number of attacker clients (int, must be < num_clients)
+        'num_clients': 10,  # Total number of federated learning clients (int)
+        'num_attackers': 3,  # Number of attacker clients (int, must be < num_clients)
         'num_benign_clients': None,  # Optional: Explicit number of benign clients for baseline experiment
                                      # If None, baseline will use (num_clients - num_attackers) to ensure fair comparison
                                      # If set, baseline experiment will use exactly this many benign clients
         'num_rounds': 50,  # Total number of federated learning rounds (int)
         
         # ========== Training Mode Configuration ==========
-        'use_lora': True,  # True for LoRA fine-tuning, False for full fine-tuning
+        'use_lora': False,  # True for LoRA fine-tuning, False for full fine-tuning
         # LoRA parameters (only used when use_lora=True)
-        'lora_r': 16,  # LoRA rank (controls the rank of low-rank matrices)
-        'lora_alpha': 32,  # LoRA alpha (scaling factor, typically 2*r)
+        # NOTE: Lower r values = faster training but potentially less capacity
+        # Recommended: r=8 for speed, r=16 for better performance (default)
+        'lora_r': 8,  # LoRA rank (controls the rank of low-rank matrices) - REDUCED from 16 to 8 for speed
+        'lora_alpha': 16,  # LoRA alpha (scaling factor, typically 2*r) - UPDATED to match r=8
         'lora_dropout': 0.1,  # LoRA dropout rate
         'lora_target_modules': None,  # None = use default for DistilBERT (["q_lin", "k_lin", "v_lin", "out_lin"])
         # Model configuration
@@ -465,6 +467,7 @@ def main():
         'generate_plots': True,  # Whether to generate visualization plots (bool)
         'run_both_experiments': False,  # Set to True to run baseline + attack (for Figure 5 comparison)
     }
+
 
     # Run experiments based on configuration
     if config.get('run_both_experiments', False):
@@ -578,6 +581,7 @@ def main():
             print("To generate Figure 5, set 'run_both_experiments': True in config")
             print("or run a separate experiment with 'num_attackers': 0")
             print("=" * 60)
+
 
 if __name__ == "__main__":
     main()
