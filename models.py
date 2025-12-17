@@ -184,9 +184,17 @@ class NewsClassifierModel(nn.Module):
                         f"but only {flat_params.numel() - offset} remaining. "
                         f"Total needed: {offset + numel}, provided: {flat_params.numel()}"
                     )
-                param.data.copy_(
-                    flat_params[offset:offset + numel].view(param.shape)
-                )
+                # Get the parameter slice
+                param_slice = flat_params[offset:offset + numel].view(param.shape)
+                # CRITICAL: Ensure param_slice is on the same device as param
+                # This prevents device mismatch errors, especially when flat_params is on CPU
+                # but param is on GPU (or vice versa)
+                if param_slice.device != param.device:
+                    param_slice = param_slice.to(param.device)
+                # Ensure dtype matches
+                if param_slice.dtype != param.dtype:
+                    param_slice = param_slice.to(dtype=param.dtype)
+                param.data.copy_(param_slice)
                 offset += numel
         
         # Verify we used all parameters

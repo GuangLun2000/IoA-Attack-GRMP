@@ -601,12 +601,17 @@ class AttackerClient(Client):
             module: The module to move
             device: Target device
         """
-        for param in module.parameters(recurse=False):
+        # Use named_parameters to get all parameters including nested ones
+        for name, param in module.named_parameters(recurse=False):
             if param.device != device:
-                param.data = param.data.to(device)
-        for buffer in module.buffers(recurse=False):
+                # Force move by creating new tensor on target device
+                with torch.no_grad():
+                    param.data = param.data.to(device, non_blocking=True)
+        for name, buffer in module.named_buffers(recurse=False):
             if buffer.device != device:
-                buffer.data = buffer.data.to(device)
+                # Force move buffer
+                buffer.data = buffer.data.to(device, non_blocking=True)
+        # Recursively process all child modules
         for child in module.children():
             self._ensure_model_on_device(child, device)
 
@@ -648,6 +653,18 @@ class AttackerClient(Client):
             # This is necessary because PEFT models have nested structures that .to() might not handle correctly
             self._ensure_model_on_device(self.model, self.device)
             
+            # Double-check: Verify ALL parameters and buffers are actually on GPU
+            # This is especially critical for PEFT models
+            for name, param in self.model.named_parameters():
+                if param.device != self.device:
+                    print(f"    [Attacker {self.client_id}] ERROR: Parameter {name} still on {param.device}, forcing move to {self.device}")
+                    with torch.no_grad():
+                        param.data = param.data.to(self.device, non_blocking=True)
+            for name, buffer in self.model.named_buffers():
+                if buffer.device != self.device:
+                    print(f"    [Attacker {self.client_id}] ERROR: Buffer {name} still on {buffer.device}, forcing move to {self.device}")
+                    buffer.data = buffer.data.to(self.device, non_blocking=True)
+            
             self._model_on_gpu = True
 
         try:
@@ -660,7 +677,15 @@ class AttackerClient(Client):
             # even though they're not in param_dict (for LoRA mode)
             for name, value in param_dict.items():
                 if value.device != self.device:
-                    param_dict[name] = value.to(self.device)
+                    param_dict[name] = value.to(self.device, non_blocking=True)
+            
+            # EXTRA SAFETY: Before using stateless.functional_call, verify model is completely on GPU
+            # Check a sample of parameters to ensure the model is really on GPU
+            sample_param = next(iter(self.model.parameters()))
+            if sample_param.device != self.device:
+                print(f"    [Attacker {self.client_id}] CRITICAL: Model not fully on {self.device}, forcing move")
+                self.model.to(self.device)
+                self._ensure_model_on_device(self.model, self.device)
 
             total_loss = 0.0
             batches = 0
@@ -674,7 +699,24 @@ class AttackerClient(Client):
                 try:
                     # CRITICAL: For PEFT models, stateless.functional_call only replaces the parameters
                     # we provide, but base model parameters must also be on GPU
-                    # We've already ensured the model is on GPU above, so this should work
+                    # Final verification before calling stateless.functional_call
+                    # Ensure ALL model parameters (including base model) are on GPU
+                    self._ensure_model_on_device(self.model, self.device)
+                    
+                    # Final check: verify every single parameter is on the correct device
+                    # This is critical for PEFT models
+                    device_mismatch_found = False
+                    for name, param in self.model.named_parameters():
+                        if param.device != self.device:
+                            print(f"    [Attacker {self.client_id}] CRITICAL PRE-CALL: Parameter {name} on {param.device}, forcing to {self.device}")
+                            with torch.no_grad():
+                                param.data = param.data.to(self.device, non_blocking=True)
+                            device_mismatch_found = True
+                    if device_mismatch_found:
+                        print(f"    [Attacker {self.client_id}] WARNING: Found device mismatches, fixed them before stateless.functional_call")
+                    
+                    # Use stateless.functional_call
+                    # For PEFT models, this will use param_dict for LoRA params and base model params from the model
                     logits = stateless.functional_call(
                         self.model,
                         param_dict,
@@ -699,6 +741,19 @@ class AttackerClient(Client):
                         # This is essential for PEFT models with nested structures
                         self._ensure_model_on_device(self.model, self.device)
                         
+                        # Verify ALL parameters are on GPU before proceeding
+                        for name, param in self.model.named_parameters():
+                            if param.device != self.device:
+                                print(f"    [Attacker {self.client_id}] CRITICAL in fallback: Parameter {name} on {param.device}, forcing to {self.device}")
+                                with torch.no_grad():
+                                    param.data = param.data.to(self.device, non_blocking=True)
+                        
+                        # Verify ALL buffers are on GPU
+                        for name, buffer in self.model.named_buffers():
+                            if buffer.device != self.device:
+                                print(f"    [Attacker {self.client_id}] CRITICAL in fallback: Buffer {name} on {buffer.device}, forcing to {self.device}")
+                                buffer.data = buffer.data.to(self.device, non_blocking=True)
+                        
                         # Save original parameters and set new values
                         # Critical: Ensure all parameters are on the correct device before setting
                         for name, param in self.model.named_parameters():
@@ -710,7 +765,7 @@ class AttackerClient(Client):
                                 # Ensure new_value is on the same device as param
                                 # This is critical for PEFT models where base model params may be on different devices
                                 if new_value.device != param.device:
-                                    new_value = new_value.to(param.device)
+                                    new_value = new_value.to(param.device, non_blocking=True)
                                 # Ensure data type matches
                                 if new_value.dtype != param.dtype:
                                     new_value = new_value.to(dtype=param.dtype)
@@ -721,6 +776,13 @@ class AttackerClient(Client):
                         # This is especially important for PEFT models with nested structures
                         # Double-check with recursive function
                         self._ensure_model_on_device(self.model, self.device)
+                        
+                        # One more explicit check before forward pass
+                        # This is critical for catching any remaining device mismatches
+                        for name, param in self.model.named_parameters():
+                            if param.device != self.device:
+                                print(f"    [Attacker {self.client_id}] FINAL CHECK FAILED: Parameter {name} on {param.device}")
+                                raise RuntimeError(f"Parameter {name} is on {param.device} but should be on {self.device}")
                         
                         # Run forward pass
                         # NewsClassifierModel.forward() returns logits directly
