@@ -668,7 +668,7 @@ def main():
         'opt_init_perturbation_scale': 0.001,  # Perturbation scale for optimization initialization (float)
         'grad_clip_norm': 1.0,  # Gradient clipping norm for training stability (float)
         # 'attacker_claimed_data_size': None,  # If None, uses actual assigned data size (recommended for realistic scenario)
-        # If set to a value, overrides actual data size (for attack experiments where attacker claims more data)
+            # If set to a value, overrides actual data size (for attack experiments where attacker claims more data)
         'attacker_claimed_data_size': None,  # None = use actual assigned data size (recommended)
         
         # ========== Proxy Loss Estimation Parameters ==========
