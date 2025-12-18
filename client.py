@@ -1240,6 +1240,7 @@ class AttackerClient(Client):
         
         # Check if F_recon is valid
         F_recon_rows = int(F_recon.shape[0])  # Convert to Python int
+        print(f"    [Attacker {self.client_id}] F_recon.shape = ({F_recon_rows}, {F_recon.shape[1]})")
         if F_recon_rows == 0:
             # Empty feature matrix: return zeros
             print(f"    [Attacker {self.client_id}] F_recon is empty, using zero fallback")
