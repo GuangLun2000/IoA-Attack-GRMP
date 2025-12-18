@@ -133,6 +133,55 @@ class Server:
         # Store client_ids for similarity display
         self._current_client_ids = client_ids
         self._sorted_client_ids = client_ids
+        
+        # Check if there are any attackers
+        has_attackers = any(getattr(self.clients[cid], 'is_attacker', False) for cid in client_ids)
+        
+        if not has_attackers:
+            # Standard FedAvg aggregation (no defense mechanism for baseline experiments)
+            # This is the standard federated learning aggregation when there are no attackers
+            weights = []
+            for cid in client_ids:
+                client = self.clients[cid]
+                # Use actual data size for weighting (standard FedAvg)
+                w = len(getattr(client, 'data_indices', [])) or 1.0
+                weights.append(w)
+            
+            # Weighted aggregation (standard FedAvg)
+            dtype = updates[0].dtype
+            stacked = torch.stack(updates).to(self.device)
+            weight_tensor = torch.tensor(weights, device=self.device, dtype=dtype)
+            weight_tensor = weight_tensor / weight_tensor.sum()
+            aggregated_update = (stacked * weight_tensor.view(-1, 1)).sum(dim=0)
+            aggregated_update_norm = torch.norm(aggregated_update).item()
+            del stacked
+            
+            # Update global model (standard FedAvg: w_t+1 = w_t + η * aggregated_update)
+            current_params = self.global_model.get_flat_params()
+            new_params = current_params + self.server_lr * aggregated_update
+            self.global_model.set_flat_params(new_params)
+            
+            print(f"  📊 Standard FedAvg: Aggregated {len(updates)}/{len(updates)} updates")
+            print(f"  🔧 Server Learning Rate: {self.server_lr}")
+            print(f"  📐 Aggregated update norm: {aggregated_update_norm:.6f}")
+            
+            # Return defense log with all clients accepted (for compatibility)
+            similarities = torch.ones(len(updates), device=self.device).cpu().numpy()
+            defense_log = {
+                'similarities': similarities.tolist(),
+                'accepted_clients': client_ids.copy(),
+                'rejected_clients': [],
+                'threshold': 0.0,
+                'mean_similarity': 1.0,
+                'std_similarity': 0.0,
+                'tolerance_factor': self.tolerance_factor,
+                'rejection_rate': 0.0,
+                'aggregated_update_norm': aggregated_update_norm
+            }
+            self.history['rejection_rates'].append(0.0)
+            return defense_log
+        
+        # Defense mechanism (only when there are attackers)
         """
         Aggregate updates - Enhanced stability version.
         Uses a more lenient defense mechanism and smooth update strategy.
