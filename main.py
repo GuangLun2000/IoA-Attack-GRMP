@@ -298,25 +298,11 @@ def run_experiment(config):
                        if getattr(client, 'is_attacker', False)]
         
         # Generate all figures
-        # Check if baseline experiment results exist for Figure 5
-        baseline_path = results_dir / f"{config['experiment_name']}_no_attack_results.json"
-        baseline_local_accs = None
-        if baseline_path.exists():
-            try:
-                with open(baseline_path, 'r') as f:
-                    baseline_data = json.load(f)
-                    baseline_local_accs = baseline_data.get('local_accuracies', None)
-                    if baseline_local_accs:
-                        print("  Found baseline experiment data for Figure 5")
-            except Exception as e:
-                print(f"  WARNING: Could not load baseline data: {e}")
-        
         visualizer.generate_all_figures(
             server_log_data=server.log_data,
             local_accuracies=server.history['local_accuracies'],
             attacker_ids=attacker_ids,
             experiment_name=config['experiment_name'],
-            baseline_local_accuracies=baseline_local_accs,
             num_rounds=config['num_rounds'],
             attack_start_round=config['attack_start_round'],
             num_clients=config['num_clients'],
@@ -346,7 +332,7 @@ def analyze_results(metrics):
 
 def run_no_attack_experiment(config_base: Dict) -> Dict:
     """
-    Run a baseline experiment WITHOUT any attackers (for Figure 5 comparison).
+    Run a baseline experiment WITHOUT any attackers.
         
     Args:
         config_base: Base configuration dictionary
@@ -386,8 +372,8 @@ def main():
         'num_clients': 10,  # Total number of federated learning clients (int)
         'num_attackers': 0,  # Number of attacker clients (int, must be < num_clients)
         'num_benign_clients': None,  # Optional: Explicit number of benign clients for baseline experiment
-                                     # If None, baseline will use (num_clients - num_attackers) to ensure fair comparison
-                                     # If set, baseline experiment will use exactly this many benign clients
+                                    # If None, baseline will use (num_clients - num_attackers) to ensure fair comparison
+                                    # If set, baseline experiment will use exactly this many benign clients
         'num_rounds': 50,  # Total number of federated learning rounds (int)
         
         # ========== Training Mode Configuration ==========
@@ -467,7 +453,7 @@ def main():
         
         # ========== Visualization ==========
         'generate_plots': True,  # Whether to generate visualization plots (bool)
-        'run_both_experiments': False,  # Set to True to run baseline + attack (for Figure 5 comparison)
+        'run_both_experiments': False,  # Set to True to run baseline + attack experiments
     }
 
 
@@ -478,7 +464,7 @@ def main():
         print("Running COMPLETE Experiment Suite")
         print("=" * 60)
         print("This will run:")
-        print("  1. Baseline experiment (no attack) - for Figure 5")
+        print("  1. Baseline experiment (no attack)")
         print("  2. Attack experiment (with GRMP) - for Figures 3, 4, 6")
         print("=" * 60)
         
@@ -517,25 +503,6 @@ def main():
             print("Generating Combined Visualizations")
             print("=" * 60)
             
-            # Load baseline results for Figure 5
-            baseline_path = results_dir / f"{config['experiment_name']}_no_attack_results.json"
-            baseline_local_accs = None
-            if baseline_path.exists():
-                try:
-                    with open(baseline_path, 'r') as f:
-                        baseline_data = json.load(f)
-                        baseline_local_accs = baseline_data.get('local_accuracies', None)
-                        if baseline_local_accs:
-                            print("  ✓ Found baseline experiment data for Figure 5")
-                            # Generate Figure 5 from baseline
-                            baseline_rounds = list(range(1, len(baseline_results) + 1))
-                            visualizer.plot_figure5_local_accuracy_no_attack(
-                                baseline_local_accs, baseline_rounds,
-                                save_path=results_dir / f"{config['experiment_name']}_figure5.png"
-                            )
-                except Exception as e:
-                    print(f"  ⚠️  WARNING: Could not load baseline data: {e}")
-            
             # Load attack experiment results for Figures 3, 4, 6
             attack_path = results_dir / f"{config['experiment_name']}_results.json"
             attack_local_accs = None
@@ -549,14 +516,13 @@ def main():
                 except Exception as e:
                     print(f"  ⚠️  WARNING: Could not load attack data: {e}")
             
-            # Generate Figures 3, 4, 6 with baseline data if available
+            # Generate Figures 3, 4, 6
             if attack_local_accs:
                 visualizer.generate_all_figures(
                     server_log_data=attack_results,
                     local_accuracies=attack_local_accs,
                     attacker_ids=attacker_ids,
                     experiment_name=config['experiment_name'],
-                    baseline_local_accuracies=baseline_local_accs,
                     num_rounds=config['num_rounds'],
                     attack_start_round=config['attack_start_round'],
                     num_clients=config['num_clients'],
@@ -577,14 +543,6 @@ def main():
         
         results, metrics = run_experiment(config)
         analyze_results(metrics)
-        
-        # Note about Figure 5 if running attack-only
-        if config.get('num_attackers', 0) > 0 and config.get('generate_plots', True):
-            print("\n" + "=" * 60)
-            print("NOTE: Figure 5 (No Attack) requires a baseline experiment.")
-            print("To generate Figure 5, set 'run_both_experiments': True in config")
-            print("or run a separate experiment with 'num_attackers': 0")
-            print("=" * 60)
 
 
 if __name__ == "__main__":

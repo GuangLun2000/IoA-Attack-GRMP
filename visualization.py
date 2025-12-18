@@ -363,61 +363,6 @@ class ExperimentVisualizer:
                        dpi=300, bbox_inches='tight')
         plt.close()
     
-    def plot_figure5_local_accuracy_no_attack(self, local_accuracies: Dict[int, List[float]], 
-                                             rounds: List[int], save_path: Optional[str] = None):
-        """
-        Figure 5: Learning accuracy of local LLM agents with no attack 
-        over communication rounds.
-        """
-        fig, ax = plt.subplots(figsize=(6.5, 5))
-        
-        # Plot each benign agent - IEEE style
-        # Ensure ALL clients are plotted with distinct colors and markers
-        for i, (client_id, accs) in enumerate(sorted(local_accuracies.items())):
-            # Align accuracies with rounds length
-            if len(accs) < len(rounds):
-                accs = accs + [accs[-1] if len(accs) > 0 else 0.0] * (len(rounds) - len(accs))
-            elif len(accs) > len(rounds):
-                accs = accs[:len(rounds)]
-            
-            if len(accs) == len(rounds):
-                # Convert to percentage
-                accs_pct = [acc * 100 for acc in accs]
-                # Use modulo to cycle through colors and markers if needed
-                color = IEEE_COLORS['benign'][i % len(IEEE_COLORS['benign'])]
-                marker = IEEE_MARKERS['benign'][i % len(IEEE_MARKERS['benign'])]
-                ax.plot(rounds, accs_pct, '-', color=color, linewidth=1.5,
-                       marker=marker, markersize=4, markevery=max(1, len(rounds)//20),
-                       label=f'Device {client_id+1}', zorder=2,
-                       markerfacecolor=color, markeredgecolor='white', markeredgewidth=0.5)
-            else:
-                print(f"  ⚠️  Warning: Client {client_id} - accs length ({len(accs)}) != rounds length ({len(rounds)})")
-        
-        # IEEE-style axes
-        ax.set_xlabel('Episodes', fontsize=11, fontweight='normal')
-        ax.set_ylabel('Local Testing Accuracy (%)', fontsize=11, fontweight='normal')
-        ax.set_ylim([80, 95])
-        ax.set_xlim([1, max(rounds)])
-        ax.grid(True, alpha=0.2, linestyle='--', linewidth=0.5)
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        
-        # IEEE-style legend: place outside plot area to avoid blocking data
-        legend = ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1.0), 
-                          frameon=True, fancybox=False, shadow=False,
-                          edgecolor='black', framealpha=1.0, fontsize=9, 
-                          ncol=1, columnspacing=0.5)
-        # Adjust layout to make room for legend outside the plot
-        plt.tight_layout(rect=[0, 0, 0.85, 1])  # Leave 15% space on right for legend
-        
-        if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"  ✅ Saved Figure 5 to: {save_path}")
-        else:
-            plt.savefig(self.results_dir / 'figure5_local_accuracy_no_attack.png', 
-                       dpi=300, bbox_inches='tight')
-        plt.close()
-    
     def plot_figure6_local_accuracy_with_attack(self, local_accuracies: Dict[int, List[float]], 
                                                 rounds: List[int], 
                                                 attacker_ids: List[int],
@@ -533,7 +478,6 @@ class ExperimentVisualizer:
                             local_accuracies: Optional[Dict[int, List[float]]] = None,
                             attacker_ids: Optional[List[int]] = None,
                             experiment_name: str = "experiment",
-                            baseline_local_accuracies: Optional[Dict[int, List[float]]] = None,
                             num_rounds: Optional[int] = None,
                             attack_start_round: Optional[int] = None,
                             num_clients: Optional[int] = None,
@@ -546,9 +490,8 @@ class ExperimentVisualizer:
             local_accuracies: Dict mapping client_id to list of local accuracies per round (attack experiment)
             attacker_ids: List of attacker client IDs
             experiment_name: Name for output files
-            baseline_local_accuracies: Dict for baseline (no attack) experiment - used for Figure 5
             num_rounds: Total number of rounds (from config) - ensures all figures use correct round count
-            attack_start_round: Round when attack phase starts (for Figure 5 fallback)
+            attack_start_round: Round when attack phase starts
             num_clients: Total number of clients (from config) - used to correctly identify all clients
             num_attackers: Number of attacker clients (from config) - used to correctly identify attackers
         """
@@ -597,57 +540,7 @@ class ExperimentVisualizer:
             num_attackers=num_attackers
         )
         
-        # Figure 5: No Attack (requires baseline experiment data)
-        if baseline_local_accuracies is not None:
-            print("📊 Generating Figure 5: Local Accuracy (No Attack)...")
-            # Use num_rounds if provided, otherwise infer from baseline data
-            if num_rounds is not None:
-                baseline_rounds = list(range(1, num_rounds + 1))
-                # Ensure local_accuracies align with num_rounds
-                aligned_baseline_accs = {}
-                for cid, accs in baseline_local_accuracies.items():
-                    if len(accs) < num_rounds:
-                        # Pad with last value if incomplete
-                        accs = accs + [accs[-1]] * (num_rounds - len(accs))
-                    elif len(accs) > num_rounds:
-                        # Truncate if too long
-                        accs = accs[:num_rounds]
-                    aligned_baseline_accs[cid] = accs
-                baseline_local_accuracies = aligned_baseline_accs
-            else:
-                # Fallback: infer from data length
-                baseline_rounds = list(range(1, len(baseline_local_accuracies.get(
-                    list(baseline_local_accuracies.keys())[0], [])) + 1))
-            
-            self.plot_figure5_local_accuracy_no_attack(
-                baseline_local_accuracies, baseline_rounds,
-                save_path=self.results_dir / f'{experiment_name}_figure5.png'
-            )
-        elif local_accuracies is not None:
-            # Fallback: Use learning phase data (rounds < attack_start_round) as "no attack"
-            print("📊 Generating Figure 5: Local Accuracy (Learning Phase - Low Attack)...")
-            if attacker_ids is None:
-                attacker_ids = []
-            
-            # Use attack_start_round from parameter, or default to 10
-            learning_phase_end = attack_start_round if attack_start_round is not None else 10
-            # Extract learning phase data (first few rounds with minimal attack)
-            learning_phase_rounds = [r for r in rounds if r <= learning_phase_end]
-            benign_ids = [cid for cid in local_accuracies.keys() if cid not in attacker_ids]
-            
-            if benign_ids and len(learning_phase_rounds) > 0:
-                learning_accs = {cid: local_accuracies[cid][:len(learning_phase_rounds)] 
-                                for cid in benign_ids}
-                self.plot_figure5_local_accuracy_no_attack(
-                    learning_accs, learning_phase_rounds,
-                    save_path=self.results_dir / f'{experiment_name}_figure5_learning_phase.png'
-                )
-                print("  ⚠️  Note: Using learning phase data. For true 'no attack' baseline,")
-                print("     run a separate experiment with 'num_attackers': 0")
-        else:
-            print("  ⚠️  Figure 5 (No Attack) skipped: No baseline data available.")
-            print("     To generate Figure 5, run a baseline experiment with 'num_attackers': 0")
-            print("     or set 'run_both_experiments': True in config")
+        # Figure 5 removed: When num_attackers=0, use Figure 3 instead to show global accuracy
         
         # Figure 6: With Attack (from attack experiment)
         if local_accuracies is not None:
