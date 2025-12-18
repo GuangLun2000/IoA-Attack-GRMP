@@ -41,20 +41,14 @@ class ExperimentVisualizer:
     
     def plot_figure3_global_accuracy_stability(self, log_data: List[Dict], save_path: Optional[str] = None, num_rounds: Optional[int] = None):
         """
-        Figure 3 (revised): Global learning accuracy, stability (|Δacc|), and rejection rate.
-        Suitable for data-agnostic poisoning where ASR is not the key metric.
+        Figure 3: Global learning accuracy over communication rounds.
+        Displays only the global accuracy curve without additional metrics.
         """
         rounds = [log['round'] for log in log_data]
         clean_acc = [log.get('clean_accuracy', 0.0) for log in log_data]
-        rejection_rate = [log.get('defense', {}).get('rejection_rate', 0.0) for log in log_data]
-        
-        # Accuracy change magnitude |Δacc|
-        acc_diff = [0.0]
-        for i in range(1, len(clean_acc)):
-            acc_diff.append(abs(clean_acc[i] - clean_acc[i-1]))
         
         # Ensure all arrays have the same length
-        min_len = min(len(rounds), len(clean_acc), len(rejection_rate), len(acc_diff))
+        min_len = min(len(rounds), len(clean_acc))
         if min_len == 0:
             print("  ⚠️  Warning: Figure 3 - No data to plot")
             return
@@ -62,8 +56,6 @@ class ExperimentVisualizer:
         # Truncate all arrays to the same length
         rounds = rounds[:min_len]
         clean_acc = clean_acc[:min_len]
-        rejection_rate = rejection_rate[:min_len]
-        acc_diff = acc_diff[:min_len]
         
         # Validate/pad
         if num_rounds is not None and len(rounds) != num_rounds:
@@ -74,42 +66,24 @@ class ExperimentVisualizer:
                 for _ in missing:
                     rounds.append(expected_rounds[len(rounds)])
                     clean_acc.append(clean_acc[-1] if clean_acc else 0.0)
-                    rejection_rate.append(rejection_rate[-1] if rejection_rate else 0.0)
-                    acc_diff.append(0.0)
                 print(f"     Padded {len(missing)} missing rounds")
         
-        fig, ax1 = plt.subplots(figsize=(10, 6))
+        fig, ax = plt.subplots(figsize=(10, 6))
         color_acc = 'tab:blue'
-        ax1.set_xlabel('Communication Round', fontsize=12, fontweight='bold')
-        ax1.set_ylabel('Global Learning Accuracy', color=color_acc, fontsize=12, fontweight='bold')
-        line1 = ax1.plot(rounds, clean_acc, 'o-', color=color_acc, linewidth=2,
-                         markersize=6, label='Accuracy', zorder=3)
-        acc_min = [a - 0.01 for a in clean_acc]
-        acc_max = [a + 0.01 for a in clean_acc]
-        ax1.fill_between(rounds, acc_min, acc_max, alpha=0.15, color=color_acc,
-                         label='Accuracy Range')
-        ax1.tick_params(axis='y', labelcolor=color_acc)
-        ax1.set_ylim([max(0.0, min(clean_acc) - 0.05), min(1.0, max(clean_acc) + 0.05)])
-        ax1.set_xlim([1, max(rounds) if rounds else 1])
-        ax1.grid(True, alpha=0.3)
+        ax.set_xlabel('Communication Round', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Global Learning Accuracy', fontsize=12, fontweight='bold')
         
-        # Right Y-axis: rejection rate and |Δacc|
-        ax2 = ax1.twinx()
-        color_rej = 'tab:red'
-        color_delta = 'tab:orange'
-        ax2.set_ylabel('Rejection Rate / |Δacc|', color=color_rej, fontsize=12, fontweight='bold')
-        line2 = ax2.plot(rounds, rejection_rate, 's-', color=color_rej, linewidth=2,
-                         markersize=6, label='Rejection Rate', zorder=3)
-        line3 = ax2.plot(rounds, acc_diff, 'd--', color=color_delta, linewidth=2,
-                         markersize=5, label='|Δacc|', zorder=2)
-        ax2.tick_params(axis='y', labelcolor=color_rej)
-        ax2.set_ylim([0.0, max(0.01, max(rejection_rate + acc_diff)) * 1.2])
+        # Plot accuracy line
+        ax.plot(rounds, clean_acc, 'o-', color=color_acc, linewidth=2,
+                markersize=6, label='Global Accuracy', zorder=3)
         
-        lines = line1 + line2 + line3
-        labels = [l.get_label() for l in lines]
-        ax1.legend(lines, labels, loc='upper left', framealpha=0.9)
+        ax.tick_params(axis='y', labelcolor=color_acc)
+        ax.set_ylim([max(0.0, min(clean_acc) - 0.05), min(1.0, max(clean_acc) + 0.05)])
+        ax.set_xlim([1, max(rounds) if rounds else 1])
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc='best', framealpha=0.9)
         
-        plt.title('Figure 3: Global Accuracy, Stability (|Δacc|) and Rejection Rate',
+        plt.title('Figure 3: Global Learning Accuracy',
                   fontsize=14, fontweight='bold', pad=20)
         plt.tight_layout()
         
@@ -121,16 +95,20 @@ class ExperimentVisualizer:
     def plot_figure4_cosine_similarity(self, log_data: List[Dict], 
                                       attacker_ids: Optional[List[int]] = None,
                                       save_path: Optional[str] = None,
-                                      num_rounds: Optional[int] = None):
+                                      num_rounds: Optional[int] = None,
+                                      num_clients: Optional[int] = None,
+                                      num_attackers: Optional[int] = None):
         """
         Figure 4: Temporal evolution of cosine similarity for each LLM agent 
         with dynamic detection threshold over communication rounds.
         
         Args:
             log_data: List of round logs
-            attacker_ids: List of attacker client IDs (if None, assumes last 2 clients are attackers)
+            attacker_ids: List of attacker client IDs (if None, will infer from num_clients and num_attackers)
             save_path: Path to save the figure
             num_rounds: Total number of rounds (for validation)
+            num_clients: Total number of clients (for inferring attacker_ids if not provided)
+            num_attackers: Number of attacker clients (for inferring attacker_ids if not provided)
         """
         rounds = [log['round'] for log in log_data]
         
@@ -194,9 +172,17 @@ class ExperimentVisualizer:
         # Separate into benign and attacker
         all_ids = sorted(client_similarities.keys())
         if attacker_ids is None:
-            # Default assumption: last 2 clients are attackers
-            num_attackers = 2
-            attacker_ids_set = set(all_ids[-num_attackers:]) if len(all_ids) >= num_attackers else set()
+            # Infer attacker_ids from num_clients and num_attackers
+            if num_clients is not None and num_attackers is not None:
+                attacker_ids_set = set(range(num_clients - num_attackers, num_clients))
+            else:
+                # Fallback: use all_ids to infer (assume last clients are attackers)
+                if num_attackers is not None:
+                    attacker_ids_set = set(all_ids[-num_attackers:]) if len(all_ids) >= num_attackers else set()
+                else:
+                    # Last resort: assume 2 attackers (old behavior)
+                    print("  ⚠️  Warning: Could not infer attacker_ids, assuming last 2 clients are attackers")
+                    attacker_ids_set = set(all_ids[-2:]) if len(all_ids) >= 2 else set()
         else:
             attacker_ids_set = set(attacker_ids)
         
@@ -206,9 +192,11 @@ class ExperimentVisualizer:
                            for cid in all_ids if cid in attacker_ids_set]
         
         # Plot benign agents (blue lines with different markers)
-        markers_benign = ['o', '^', 's', 'D']
-        colors_benign = ['#1f77b4', '#2ca02c', '#9467bd', '#8c564b']
-        for i, client in enumerate(benign_clients[:4]):  # Limit to 4 benign agents
+        # Extended markers and colors to support many clients
+        markers_benign = ['o', '^', 's', 'D', 'v', 'p', '*', 'h', 'X', 'd', '<', '>']
+        colors_benign = ['#1f77b4', '#2ca02c', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', 
+                        '#bcbd22', '#17becf', '#ff9896', '#c5b0d5', '#ffbb78', '#98df8a']
+        for i, client in enumerate(benign_clients):  # Plot ALL benign clients
             sims = client['sims']
             # Align similarities with rounds length
             if len(sims) < len(rounds):
@@ -227,9 +215,10 @@ class ExperimentVisualizer:
                 print(f"  ⚠️  Warning: Benign Client {client['id']} - sims length ({len(sims)}) != rounds length ({len(rounds)})")
         
         # Plot attacker agents (red/orange lines with square markers)
-        markers_attacker = ['s', 's']
-        colors_attacker = ['#d62728', '#ff7f0e']
-        for i, client in enumerate(attacker_clients[:2]):  # Limit to 2 attackers
+        markers_attacker = ['s', 'D', '^', 'v', 'p', '*', 'h', 'X']
+        colors_attacker = ['#d62728', '#ff7f0e', '#ff6b6b', '#ee5a6f', '#c44569', 
+                          '#f8b500', '#ff6348', '#ff4757']
+        for i, client in enumerate(attacker_clients):  # Plot ALL attackers
             sims = client['sims']
             # Align similarities with rounds length
             if len(sims) < len(rounds):
@@ -290,8 +279,10 @@ class ExperimentVisualizer:
         fig, ax = plt.subplots(figsize=(10, 6))
         
         # Plot each benign agent
-        markers = ['o', '^', 's', 'D', 'v', 'p']
-        colors = ['#1f77b4', '#2ca02c', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
+        # Extended markers and colors to support many clients
+        markers = ['o', '^', 's', 'D', 'v', 'p', '*', 'h', 'X', 'd', '<', '>']
+        colors = ['#1f77b4', '#2ca02c', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', 
+                 '#bcbd22', '#17becf', '#ff9896', '#c5b0d5', '#ffbb78', '#98df8a']
         
         for i, (client_id, accs) in enumerate(sorted(local_accuracies.items())):
             # Align accuracies with rounds length
@@ -332,10 +323,20 @@ class ExperimentVisualizer:
     def plot_figure6_local_accuracy_with_attack(self, local_accuracies: Dict[int, List[float]], 
                                                 rounds: List[int], 
                                                 attacker_ids: List[int],
-                                                save_path: Optional[str] = None):
+                                                save_path: Optional[str] = None,
+                                                num_clients: Optional[int] = None,
+                                                num_attackers: Optional[int] = None):
         """
         Figure 6: Learning accuracy of local LLM agents under the GRMP attack 
         over communication rounds.
+        
+        Args:
+            local_accuracies: Dict mapping client_id to list of local accuracies per round
+            rounds: List of round numbers
+            attacker_ids: List of attacker client IDs
+            save_path: Path to save the figure
+            num_clients: Total number of clients (for validation)
+            num_attackers: Number of attacker clients (for validation)
         """
         fig, ax = plt.subplots(figsize=(10, 6))
         
@@ -346,9 +347,11 @@ class ExperimentVisualizer:
                         if cid in attacker_ids}
         
         # Plot benign agents (blue lines)
-        markers_benign = ['o', '^', 's', 'D']
-        colors_benign = ['#1f77b4', '#2ca02c', '#9467bd', '#8c564b']
-        for i, (client_id, accs) in enumerate(sorted(benign_accs.items())[:4]):
+        # Extended markers and colors to support many clients
+        markers_benign = ['o', '^', 's', 'D', 'v', 'p', '*', 'h', 'X', 'd', '<', '>']
+        colors_benign = ['#1f77b4', '#2ca02c', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', 
+                        '#bcbd22', '#17becf', '#ff9896', '#c5b0d5', '#ffbb78', '#98df8a']
+        for i, (client_id, accs) in enumerate(sorted(benign_accs.items())):
             # Align accuracies with rounds length
             if len(accs) < len(rounds):
                 # Pad with last value if incomplete
@@ -366,9 +369,10 @@ class ExperimentVisualizer:
                 print(f"  ⚠️  Warning: Benign Client {client_id} - accs length ({len(accs)}) != rounds length ({len(rounds)})")
         
         # Plot attacker agents (red/orange lines with square markers)
-        markers_attacker = ['s', 's']
-        colors_attacker = ['#d62728', '#ff7f0e']
-        for i, (client_id, accs) in enumerate(sorted(attacker_accs.items())[:2]):
+        markers_attacker = ['s', 'D', '^', 'v', 'p', '*', 'h', 'X']
+        colors_attacker = ['#d62728', '#ff7f0e', '#ff6b6b', '#ee5a6f', '#c44569', 
+                          '#f8b500', '#ff6348', '#ff4757']
+        for i, (client_id, accs) in enumerate(sorted(attacker_accs.items())):
             # Align accuracies with rounds length
             if len(accs) < len(rounds):
                 # Pad with last value if incomplete
@@ -385,9 +389,30 @@ class ExperimentVisualizer:
             else:
                 print(f"  ⚠️  Warning: Attacker Client {client_id} - accs length ({len(accs)}) != rounds length ({len(rounds)})")
         
+        # Calculate dynamic y-axis range based on actual data
+        all_acc_values = []
+        for accs in local_accuracies.values():
+            if accs:
+                all_acc_values.extend(accs)
+        
+        if all_acc_values:
+            min_acc = min(all_acc_values)
+            max_acc = max(all_acc_values)
+            # Add 5% padding on both sides, but ensure minimum is at least 0.0
+            y_min = max(0.0, min_acc - 0.05)
+            y_max = min(1.0, max_acc + 0.05)
+            # Ensure there's at least a 0.1 range for visibility
+            if y_max - y_min < 0.1:
+                center = (y_min + y_max) / 2
+                y_min = max(0.0, center - 0.05)
+                y_max = min(1.0, center + 0.05)
+        else:
+            # Fallback range if no data
+            y_min, y_max = 0.0, 1.0
+        
         ax.set_xlabel('Communication Round', fontsize=12, fontweight='bold')
         ax.set_ylabel('Local Learning Accuracy', fontsize=12, fontweight='bold')
-        ax.set_ylim([0.70, 1.00])
+        ax.set_ylim([y_min, y_max])
         ax.set_xlim([1, max(rounds)])
         ax.grid(True, alpha=0.3)
         ax.legend(loc='best', framealpha=0.9)
@@ -410,7 +435,9 @@ class ExperimentVisualizer:
                             experiment_name: str = "experiment",
                             baseline_local_accuracies: Optional[Dict[int, List[float]]] = None,
                             num_rounds: Optional[int] = None,
-                            attack_start_round: Optional[int] = None):
+                            attack_start_round: Optional[int] = None,
+                            num_clients: Optional[int] = None,
+                            num_attackers: Optional[int] = None):
         """
         Generate all figures from the paper.
         
@@ -422,6 +449,8 @@ class ExperimentVisualizer:
             baseline_local_accuracies: Dict for baseline (no attack) experiment - used for Figure 5
             num_rounds: Total number of rounds (from config) - ensures all figures use correct round count
             attack_start_round: Round when attack phase starts (for Figure 5 fallback)
+            num_clients: Total number of clients (from config) - used to correctly identify all clients
+            num_attackers: Number of attacker clients (from config) - used to correctly identify attackers
         """
         print("\n" + "=" * 60)
         print("Generating Visualization Figures")
@@ -463,7 +492,9 @@ class ExperimentVisualizer:
             server_log_data,
             attacker_ids=attacker_ids,
             save_path=self.results_dir / f'{experiment_name}_figure4.png',
-            num_rounds=num_rounds
+            num_rounds=num_rounds,
+            num_clients=num_clients,
+            num_attackers=num_attackers
         )
         
         # Figure 5: No Attack (requires baseline experiment data)
@@ -537,7 +568,9 @@ class ExperimentVisualizer:
             
             self.plot_figure6_local_accuracy_with_attack(
                 aligned_local_accs, rounds, attacker_ids,
-                save_path=self.results_dir / f'{experiment_name}_figure6.png'
+                save_path=self.results_dir / f'{experiment_name}_figure6.png',
+                num_clients=num_clients,
+                num_attackers=num_attackers
             )
         else:
             print("  ⚠️  Figure 6 skipped: Local accuracies not available.")

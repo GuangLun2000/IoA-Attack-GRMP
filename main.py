@@ -318,7 +318,9 @@ def run_experiment(config):
             experiment_name=config['experiment_name'],
             baseline_local_accuracies=baseline_local_accs,
             num_rounds=config['num_rounds'],
-            attack_start_round=config['attack_start_round']
+            attack_start_round=config['attack_start_round'],
+            num_clients=config['num_clients'],
+            num_attackers=config['num_attackers']
         )
     
     return server.log_data, progressive_metrics
@@ -556,7 +558,9 @@ def main():
                     experiment_name=config['experiment_name'],
                     baseline_local_accuracies=baseline_local_accs,
                     num_rounds=config['num_rounds'],
-                    attack_start_round=config['attack_start_round']
+                    attack_start_round=config['attack_start_round'],
+                    num_clients=config['num_clients'],
+                    num_attackers=config['num_attackers']
                 )
         
         analyze_results(attack_metrics)
