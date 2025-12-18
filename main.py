@@ -139,6 +139,7 @@ def setup_experiment(config):
     server = Server(
         global_model=global_model,
         test_loader=test_loader,
+        enable_defense=config['enable_defense'],
         defense_threshold=config['defense_threshold'],
         total_rounds=config['num_rounds'],
         server_lr=config['server_lr'],
@@ -651,9 +652,9 @@ def main():
         # ========== VGAE Training Parameters ==========
         # Reference paper: input_dim=5, hidden1_dim=32, hidden2_dim=16, num_epoch=10, lr=0.01
         # Note: dim_reduction_size should be <= total trainable parameters
-        # - Full fine-tuning: ~67M parameters, dim_reduction_size=10000 is fine
-        # - LoRA (r=16): ~0.5-1M parameters, dim_reduction_size will be auto-adjusted if > LoRA params
-        # Auto-adjustment: If dim_reduction_size > actual LoRA params, it will be set to 80% of LoRA params
+            # - Full fine-tuning: ~67M parameters, dim_reduction_size=10000 is fine
+            # - LoRA (r=16): ~0.5-1M parameters, dim_reduction_size will be auto-adjusted if > LoRA params
+            # Auto-adjustment: If dim_reduction_size > actual LoRA params, it will be set to 80% of LoRA params
         'dim_reduction_size': 10000,  # Reduced dimensionality of LLM parameters (auto-adjusted for LoRA if needed)
         'vgae_epochs': 10,  # Number of epochs for VGAE training (reference: 10)
         'vgae_lr': 0.01,  # Learning rate for VGAE optimizer (reference: 0.01)
@@ -683,6 +684,8 @@ def main():
         'graph_threshold': 0.5,  # Threshold for graph adjacency matrix binarization in VGAE (float, 0.0-1.0)
         
         # ========== Defense Mechanism Parameters ==========
+        'enable_defense': True,  # Whether to enable defense mechanism (bool, True/False)
+            # Set to False to disable defense for faster testing or baseline experiments
         'defense_threshold': 0,  # Base threshold for defense mechanism (float, lower = more strict) Set to 0 for attack baseline experiment.
         'tolerance_factor': 3.0,  # Tolerance factor for defense mechanism (float, higher = more lenient). Baseline experiment uses 3.0.
         'similarity_alpha': 0.5,  # Weight for pairwise similarities in mixed similarity computation (float, 0.0-1.0)

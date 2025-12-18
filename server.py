@@ -13,11 +13,12 @@ import torch.nn.functional as F
 class Server:
     """Server class for federated learning with GRMP attack defense"""
     def __init__(self, global_model: nn.Module, test_loader,
-                defense_threshold=0.4, total_rounds=20, server_lr=0.8, tolerance_factor=2,
+                enable_defense=True, defense_threshold=0.4, total_rounds=20, server_lr=0.8, tolerance_factor=2,
                 d_T=0.5, gamma=10.0, similarity_alpha=0.7,
                 defense_high_rejection_threshold=0.4, defense_threshold_decay=0.9):
         self.global_model = copy.deepcopy(global_model)
         self.test_loader = test_loader
+        self.enable_defense = enable_defense
         self.defense_threshold = defense_threshold
         self.total_rounds = total_rounds
         # CRITICAL: Use explicit cuda:0 instead of 'cuda' to ensure device consistency
@@ -133,6 +134,50 @@ class Server:
         # Store client_ids for similarity display
         self._current_client_ids = client_ids
         self._sorted_client_ids = client_ids
+        
+        # If defense is disabled, always use standard FedAvg (no defense mechanism)
+        if not self.enable_defense:
+            # Standard FedAvg aggregation (defense mechanism disabled)
+            weights = []
+            for cid in client_ids:
+                client = self.clients[cid]
+                # Use actual data size for weighting (standard FedAvg)
+                w = len(getattr(client, 'data_indices', [])) or 1.0
+                weights.append(w)
+            
+            # Weighted aggregation (standard FedAvg)
+            dtype = updates[0].dtype
+            stacked = torch.stack(updates).to(self.device)
+            weight_tensor = torch.tensor(weights, device=self.device, dtype=dtype)
+            weight_tensor = weight_tensor / weight_tensor.sum()
+            aggregated_update = (stacked * weight_tensor.view(-1, 1)).sum(dim=0)
+            aggregated_update_norm = torch.norm(aggregated_update).item()
+            del stacked
+            
+            # Update global model (standard FedAvg: w_t+1 = w_t + η * aggregated_update)
+            current_params = self.global_model.get_flat_params()
+            new_params = current_params + self.server_lr * aggregated_update
+            self.global_model.set_flat_params(new_params)
+            
+            print(f"  📊 Standard FedAvg (Defense Disabled): Aggregated {len(updates)}/{len(updates)} updates")
+            print(f"  🔧 Server Learning Rate: {self.server_lr}")
+            print(f"  📐 Aggregated update norm: {aggregated_update_norm:.6f}")
+            
+            # Return defense log with all clients accepted (for compatibility)
+            similarities = torch.ones(len(updates), device=self.device).cpu().numpy()
+            defense_log = {
+                'similarities': similarities.tolist(),
+                'accepted_clients': client_ids.copy(),
+                'rejected_clients': [],
+                'threshold': 0.0,
+                'mean_similarity': 1.0,
+                'std_similarity': 0.0,
+                'tolerance_factor': self.tolerance_factor,
+                'rejection_rate': 0.0,
+                'aggregated_update_norm': aggregated_update_norm
+            }
+            self.history['rejection_rates'].append(0.0)
+            return defense_log
         
         # Check if there are any attackers
         has_attackers = any(getattr(self.clients[cid], 'is_attacker', False) for cid in client_ids)
