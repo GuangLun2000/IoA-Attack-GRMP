@@ -521,30 +521,28 @@ class ExperimentVisualizer:
                     # Create a copy to avoid modifying original data
                     server_log_data = server_log_data[:num_rounds]
         
-        # Figure 3: Global Accuracy, Stability, Rejection Rate (from attack experiment)
-        print("\n📊 Generating Figure 3: Global Accuracy, Stability, Rejection Rate...")
+        # Figure 1: Global Accuracy, Stability, Rejection Rate (from attack experiment)
+        print("\n📊 Generating Figure 1: Global Accuracy, Stability, Rejection Rate...")
         self.plot_figure3_global_accuracy_stability(
             server_log_data,
-            save_path=self.results_dir / f'{experiment_name}_figure3.png',
+            save_path=self.results_dir / f'{experiment_name}_figure1.png',
             num_rounds=num_rounds
         )
         
-        # Figure 4: Cosine Similarity (from attack experiment)
-        print("📊 Generating Figure 4: Cosine Similarity...")
+        # Figure 2: Cosine Similarity (from attack experiment)
+        print("📊 Generating Figure 2: Cosine Similarity...")
         self.plot_figure4_cosine_similarity(
             server_log_data,
             attacker_ids=attacker_ids,
-            save_path=self.results_dir / f'{experiment_name}_figure4.png',
+            save_path=self.results_dir / f'{experiment_name}_figure2.png',
             num_rounds=num_rounds,
             num_clients=num_clients,
             num_attackers=num_attackers
         )
         
-        # Figure 5 removed: When num_attackers=0, use Figure 3 instead to show global accuracy
-        
-        # Figure 6: With Attack (from attack experiment)
+        # Figure 3: Local Accuracy (With Attack)
         if local_accuracies is not None:
-            print("📊 Generating Figure 6: Local Accuracy (With Attack)...")
+            print("📊 Generating Figure 3: Local Accuracy (With Attack)...")
             if attacker_ids is None:
                 attacker_ids = []
             
@@ -561,12 +559,12 @@ class ExperimentVisualizer:
             
             self.plot_figure6_local_accuracy_with_attack(
                 aligned_local_accs, rounds, attacker_ids,
-                save_path=self.results_dir / f'{experiment_name}_figure6.png',
+                save_path=self.results_dir / f'{experiment_name}_figure3.png',
                 num_clients=num_clients,
                 num_attackers=num_attackers
             )
         else:
-            print("  ⚠️  Figure 6 skipped: Local accuracies not available.")
+            print("  ⚠️  Figure 3 skipped: Local accuracies not available.")
             print("     Local accuracies are automatically tracked during training.")
         
         print("\n✅ All available figures generated successfully!")

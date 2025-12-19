@@ -668,7 +668,7 @@ def main():
         'proxy_step': 0.1,  # Step size for gradient-free ascent toward global-loss proxy
         'proxy_steps': 20,  # Number of optimization steps for attack objective (int)
         'gsp_perturbation_scale': 0.05,  # Perturbation scale for GSP attack diversity (float) baseline 0.01
-        'opt_init_perturbation_scale': 0.01,  # Perturbation scale for optimization initialization (float) baseline 0.001
+        'opt_init_perturbation_scale': 0.01,  # Perturbation scale for optimization initialization (float) baseline 0.001.
         'grad_clip_norm': 1.0,  # Gradient clipping norm for training stability (float)
         # 'attacker_claimed_data_size': None,  # If None, uses actual assigned data size (recommended for realistic scenario)
             # If set to a value, overrides actual data size (for attack experiments where attacker claims more data)
