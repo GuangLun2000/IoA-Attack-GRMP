@@ -223,6 +223,19 @@ def setup_experiment(config):
                 opt_init_perturbation_scale=config['opt_init_perturbation_scale'],
                 grad_clip_norm=config['grad_clip_norm']
             )
+            
+            # 设置Lagrangian Dual参数（如果使用）
+            if config.get('use_lagrangian_dual', False):
+                client.set_lagrangian_params(
+                    use_lagrangian_dual=config['use_lagrangian_dual'],
+                    lambda_init=config.get('lambda_init', 0.1),
+                    rho_init=config.get('rho_init', 0.1),
+                    lambda_lr=config.get('lambda_lr', 0.01),
+                    rho_lr=config.get('rho_lr', 0.01)
+                )
+                print(f"    Lagrangian Dual enabled: λ(1)={config.get('lambda_init', 0.1)}, ρ(1)={config.get('rho_init', 0.1)}")
+            else:
+                print(f"    Using hard constraint projection (Lagrangian Dual disabled)")
 
         server.register_client(client)
     
@@ -670,6 +683,15 @@ def main():
         'gsp_perturbation_scale': 0.05,  # Perturbation scale for GSP attack diversity (float) baseline 0.01
         'opt_init_perturbation_scale': 0.01,  # Perturbation scale for optimization initialization (float) baseline 0.001.
         'grad_clip_norm': 1.0,  # Gradient clipping norm for training stability (float)
+        
+        # ========== Lagrangian Dual Parameters ==========
+        'use_lagrangian_dual': True,  # Whether to use Lagrangian Dual mechanism (bool, True/False)
+                                      # If False, uses hard constraint projection
+                                      # If True, uses Lagrangian penalty terms (per paper eq:lagrangian and eq:wprime_sub)
+        'lambda_init': 0.1,  # Initial λ(t) value (λ(1)≥0, per paper Algorithm 1)
+        'rho_init': 0.1,     # Initial ρ(t) value (ρ(1)≥0, per paper Algorithm 1)
+        'lambda_lr': 0.01,   # Learning rate for λ(t) update (subgradient step size)
+        'rho_lr': 0.01,      # Learning rate for ρ(t) update (subgradient step size)
         # 'attacker_claimed_data_size': None,  # If None, uses actual assigned data size (recommended for realistic scenario)
             # If set to a value, overrides actual data size (for attack experiments where attacker claims more data)
         'attacker_claimed_data_size': None,  # None = use actual assigned data size (recommended)

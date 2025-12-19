@@ -277,6 +277,15 @@ class AttackerClient(Client):
         self.d_T = None  # Distance threshold for constraint (4b): d(w'_j(t), w_g(t)) ≤ d_T
         self.gamma = None  # Upper bound for constraint (4c): Σ β'_{i,j}(t) d(w_i(t), w̄_i(t)) ≤ Γ
         self.global_model_params = None  # Store global model params for constraint (4b) (will be on GPU when needed)
+        
+        # Lagrangian dual variables (论文中的 λ(t) 和 ρ(t))
+        # 初始化在 set_lagrangian_params 中完成
+        self.lambda_dt = None  # λ(t): Lagrangian multiplier for constraint (4b)
+        self.rho_dt = None     # ρ(t): Lagrangian multiplier for constraint (4c)
+        self.use_lagrangian_dual = False  # 是否使用Lagrangian Dual机制
+        self.lambda_lr = 0.01  # λ的更新步长
+        self.rho_lr = 0.01     # ρ的更新步长
+        
         # Get model parameter count (works on CPU model)
         self._flat_numel = int(self.model.get_flat_params().numel())  # Convert to Python int
         
@@ -1119,6 +1128,38 @@ class AttackerClient(Client):
         """Set constraint parameters for Formula 4."""
         self.d_T = d_T  # Constraint (4b): d(w'_j(t), w_g(t)) ≤ d_T
         self.gamma = gamma  # Constraint (4c): Σ β'_{i,j}(t) d(w_i(t), w̄_i(t)) ≤ Γ
+    
+    def set_lagrangian_params(self, use_lagrangian_dual: bool = False,
+                              lambda_init: float = 0.1,
+                              rho_init: float = 0.1,
+                              lambda_lr: float = 0.01,
+                              rho_lr: float = 0.01):
+        """
+        设置Lagrangian Dual参数（根据论文Algorithm 1初始化）
+        
+        Paper reference: Section 3, Algorithm 1
+        - Lagrangian function: eq:lagrangian
+        - Optimization subproblem: eq:wprime_sub
+        - Initialization: λ(1)≥0, ρ(1)≥0
+        
+        Args:
+            use_lagrangian_dual: 是否使用Lagrangian Dual机制
+            lambda_init: 初始λ(1)值 (≥0, per paper Algorithm 1)
+            rho_init: 初始ρ(1)值 (≥0, per paper Algorithm 1)
+            lambda_lr: λ的更新学习率（subgradient step size）
+            rho_lr: ρ的更新学习率（subgradient step size）
+        """
+        self.use_lagrangian_dual = use_lagrangian_dual
+        if use_lagrangian_dual:
+            # 论文: λ(1)≥0, ρ(1)≥0
+            self.lambda_dt = torch.tensor(max(0.0, lambda_init), requires_grad=False)
+            self.rho_dt = torch.tensor(max(0.0, rho_init), requires_grad=False)
+            self.lambda_lr = lambda_lr
+            self.rho_lr = rho_lr
+        else:
+            # 硬约束投影模式
+            self.lambda_dt = None
+            self.rho_dt = None
 
     def _compute_global_loss(self, malicious_update: torch.Tensor, 
                             selected_benign: List[torch.Tensor],
@@ -1464,10 +1505,9 @@ class AttackerClient(Client):
             # Verify all parameters are on correct device
             self._ensure_model_on_device(self.model, target_device)
             
-            # Attack objective: Maximize F(w'_g(t)) according to paper Formula 4a
-            # We use proxy loss as approximation of F(w'_g(t))
-            # Use optimization max_batches for fast but accurate gradient estimation
-            # CRITICAL: keep_model_on_gpu=True ensures model stays on GPU for backward pass
+            # ============================================================
+            # 计算基础目标函数 F(w'_g(t))
+            # ============================================================
             global_loss = self._proxy_global_loss(
                 proxy_param, 
                 max_batches=self.proxy_max_batches_opt, 
@@ -1475,36 +1515,79 @@ class AttackerClient(Client):
                 keep_model_on_gpu=True  # Keep model on GPU for backward pass
             )
             
-            # Objective: maximize global_loss => minimize -global_loss
-            objective = -global_loss
+            # ============================================================
+            # 构建优化目标：根据是否使用Lagrangian Dual选择不同机制
+            # ============================================================
             
             # CRITICAL: Before backward, ensure all model parameters are still on GPU
             # This is essential for LoRA models where base model params might have been moved
             self._ensure_model_on_device(self.model, target_device)
             
-            # Compute constraint violations for logging (not used in optimization)
-            constraint_b_violation = torch.tensor(0.0, device=self.device)
-            if self.d_T is not None:
-                # Constraint (4b): d(w'_j(t), w'_g(t)) ≤ d_T
-                # Note: w'_g(t) = weighted_avg(selected_benign) + (D'_j/D) * w'_j(t)
-                # For simplicity, we approximate: d(w'_j, w'_g) ≈ ||w'_j - w_g||
-                # This is exact when D'_j << D (attacker has small weight)
-                # Ensure torch.norm returns a scalar by flattening first
+            if self.use_lagrangian_dual and self.lambda_dt is not None and self.rho_dt is not None:
+                # ========== 使用Lagrangian Dual机制 (论文eq:lagrangian和eq:wprime_sub) ==========
+                
+                # 确保Lagrangian乘数在正确的device上
+                lambda_dt_tensor = self.lambda_dt.to(self.device) if isinstance(self.lambda_dt, torch.Tensor) else torch.tensor(self.lambda_dt, device=self.device)
+                rho_dt_tensor = self.rho_dt.to(self.device) if isinstance(self.rho_dt, torch.Tensor) else torch.tensor(self.rho_dt, device=self.device)
+                
+                # 约束(4b): d(w'_j(t), w'_g(t)) ≤ d_T
+                # 论文公式eq:wprime_sub: -λ d(w'_j(t), w'_g(t))
+                # 近似: d(w'_j, w'_g) ≈ ||w'_j|| (当attacker权重小时)
                 dist_to_global = torch.norm(proxy_param.view(-1))
-                constraint_b_violation = F.relu(dist_to_global - self.d_T)
-            
-            constraint_c_violation = torch.tensor(0.0, device=self.device)
-            if self.gamma is not None and len(selected_benign) > 0:
-                # Constraint (4c): Σ β'_{i,j}(t) d(w_i(t), w̄_i(t)) ≤ Γ
-                # selected_benign is on CPU, need to move to GPU for computation
-                sel_benign_gpu = [u.to(self.device) for u in selected_benign]
-                sel_stack = torch.stack(sel_benign_gpu)
-                sel_mean = sel_stack.mean(dim=0)
-                distances = torch.norm(sel_stack - sel_mean, dim=1)
-                agg_dist = distances.sum()  # This returns a scalar tensor (0-dim)
-                constraint_c_violation = F.relu(agg_dist - self.gamma)
-                # Clean up GPU references
-                del sel_benign_gpu, sel_stack, sel_mean, distances
+                constraint_b_term = -lambda_dt_tensor * dist_to_global
+                
+                # 约束(4c): Σ β'_{i,j}(t) d(w_i(t), w̄_i(t)) ≤ Γ
+                # 论文公式eq:wprime_sub: +ρ Σ_{i=1}^I β'_{i,j}(t)^* d(w_i(t), w̄_i(t))
+                # 注意：β'_{i,j}(t)^*是已经选定的，所以Σ(...)是常数项
+                constraint_c_term = torch.tensor(0.0, device=self.device)
+                constraint_c_value_for_update = 0.0  # 用于更新ρ
+                if self.gamma is not None and len(selected_benign) > 0:
+                    sel_benign_gpu = [u.to(self.device) for u in selected_benign]
+                    sel_stack = torch.stack(sel_benign_gpu)
+                    sel_mean = sel_stack.mean(dim=0)
+                    distances = torch.norm(sel_stack - sel_mean, dim=1)
+                    agg_dist = distances.sum()  # Σ β'_{i,j}(t)^* d(...)
+                    constraint_c_value_for_update = agg_dist.item()
+                    # 论文公式eq:wprime_sub中这一项是+ρ Σ(...)
+                    constraint_c_term = rho_dt_tensor * agg_dist
+                    del sel_benign_gpu, sel_stack, sel_mean, distances
+                
+                # ============================================================
+                # 构建Lagrangian目标函数（论文公式eq:wprime_sub）
+                # ============================================================
+                # w'_j(t)^* = argmax_{w'_j(t)} {F(w'_g(t)) - λ d(...) + ρ Σ(...)}
+                # 转换为最小化: minimize {-F(w'_g(t)) + λ d(...) - ρ Σ(...)}
+                lagrangian_objective = -global_loss + constraint_b_term - constraint_c_term
+                
+                # ============================================================
+                # 计算约束违反量（用于更新λ和ρ）
+                # ============================================================
+                constraint_b_violation = F.relu(dist_to_global - self.d_T) if self.d_T is not None else torch.tensor(0.0, device=self.device)
+                
+                constraint_c_violation = torch.tensor(0.0, device=self.device)
+                if self.gamma is not None and len(selected_benign) > 0:
+                    constraint_c_violation = F.relu(torch.tensor(constraint_c_value_for_update, device=self.device) - self.gamma)
+                
+            else:
+                # ========== 使用硬约束投影机制（原有逻辑）==========
+                # Objective: maximize global_loss => minimize -global_loss
+                lagrangian_objective = -global_loss
+                
+                # 计算约束违反量（仅用于日志）
+                dist_to_global = torch.norm(proxy_param.view(-1)) if self.d_T is not None else torch.tensor(0.0, device=self.device)
+                constraint_b_violation = F.relu(dist_to_global - self.d_T) if self.d_T is not None else torch.tensor(0.0, device=self.device)
+                
+                constraint_c_violation = torch.tensor(0.0, device=self.device)
+                constraint_c_value_for_update = 0.0
+                if self.gamma is not None and len(selected_benign) > 0:
+                    sel_benign_gpu = [u.to(self.device) for u in selected_benign]
+                    sel_stack = torch.stack(sel_benign_gpu)
+                    sel_mean = sel_stack.mean(dim=0)
+                    distances = torch.norm(sel_stack - sel_mean, dim=1)
+                    agg_dist = distances.sum()
+                    constraint_c_value_for_update = agg_dist.item()
+                    constraint_c_violation = F.relu(agg_dist - self.gamma)
+                    del sel_benign_gpu, sel_stack, sel_mean, distances
             
             # CRITICAL: Before backward pass, ensure ALL model parameters and buffers are on GPU
             # This is essential for LoRA models where nested structures might have been affected
@@ -1529,21 +1612,63 @@ class AttackerClient(Client):
                 # One more model.to() to be absolutely sure
                 self.model.to(target_device)
             
-            # Backpropagate to maximize global loss
-            objective.backward()
+            # ============================================================
+            # 反向传播和参数更新
+            # ============================================================
+            # Backpropagate Lagrangian objective
+            lagrangian_objective.backward()
             
             # Gradient clipping to prevent explosion
             torch.nn.utils.clip_grad_norm_([proxy_param], max_norm=self.grad_clip_norm)
             
             proxy_opt.step()
             
-            # Apply hard constraint (4b) projection after each step
-            # This ensures d(w'_j, w'_g) ≤ d_T is always satisfied
-            if self.d_T is not None:
+            # ============================================================
+            # 更新Lagrangian乘数（如果在使用Lagrangian机制）
+            # 根据论文对偶问题，使用subgradient方法更新
+            # 论文Algorithm 1 Step 7: Update λ(t) and ρ(t) according to eq:dual
+            # ============================================================
+            if self.use_lagrangian_dual and self.lambda_dt is not None and self.rho_dt is not None:
+                # 对偶上升方法: λ(t+1) = λ(t) + α_λ × subgradient
+                # subgradient = (约束值 - 边界)
+                # 当约束违反时（约束值 > 边界），subgradient > 0，λ增加以惩罚违反
+                
+                if self.d_T is not None:
+                    current_dist = torch.norm(proxy_param.view(-1)).item()
+                    lambda_val = self.lambda_dt.item() if isinstance(self.lambda_dt, torch.Tensor) else self.lambda_dt
+                    # Subgradient: d(w'_j, w'_g) - d_T
+                    # 如果违反约束（d(...) > d_T），subgradient > 0，λ增加
+                    subgradient_b = current_dist - self.d_T
+                    new_lambda = lambda_val + self.lambda_lr * subgradient_b
+                    new_lambda = max(0.0, new_lambda)  # 确保非负
+                    self.lambda_dt = torch.tensor(new_lambda, requires_grad=False)
+                
+                if self.gamma is not None and len(selected_benign) > 0:
+                    rho_val = self.rho_dt.item() if isinstance(self.rho_dt, torch.Tensor) else self.rho_dt
+                    # Subgradient: Σ(...) - Γ
+                    # 如果违反约束（Σ(...) > Γ），subgradient > 0，ρ增加
+                    subgradient_c = constraint_c_value_for_update - self.gamma
+                    new_rho = rho_val + self.rho_lr * subgradient_c
+                    new_rho = max(0.0, new_rho)  # 确保非负
+                    self.rho_dt = torch.tensor(new_rho, requires_grad=False)
+            
+            # ============================================================
+            # 可选: 软约束检查（如果需要，可以进行轻微投影）
+            # 在Lagrangian机制下，通常不需要硬投影，但如果严重违反可以轻微调整
+            # ============================================================
+            if not self.use_lagrangian_dual and self.d_T is not None:
+                # 硬约束投影（原有逻辑）
                 dist_to_global = torch.norm(proxy_param).item()
                 if dist_to_global > self.d_T:
                     # Project to constraint set: scale down to satisfy d ≤ d_T
                     proxy_param.data = proxy_param.data * (self.d_T / dist_to_global)
+            elif self.use_lagrangian_dual and self.d_T is not None:
+                # 可选: 如果使用Lagrangian但严重违反，可以轻微投影以防止数值问题
+                # 这不是论文要求的，但可以防止极端情况
+                dist_to_global = torch.norm(proxy_param).item()
+                if dist_to_global > self.d_T * 1.5:  # 只对严重违反的情况（超过50%）
+                    scale_factor = (self.d_T * 1.2) / dist_to_global
+                    proxy_param.data = proxy_param.data * scale_factor
         
         malicious_update = proxy_param.detach()
         
@@ -1559,22 +1684,39 @@ class AttackerClient(Client):
         torch.cuda.empty_cache()
         
         # ============================================================
-        # STEP 8: Final hard constraint enforcement (Constraint 4b)
-        # Ensure d(w'_j(t), w'_g(t)) ≤ d_T is strictly satisfied
+        # STEP 8: Final constraint check (根据是否使用Lagrangian)
         # ============================================================
-        if self.d_T is not None:
-            # Compute distance from global model
-            # Approximation: d(w'_j, w'_g) ≈ ||w'_j - w_g||
-            # This is exact when attacker weight is small
-            dist_to_global = torch.norm(malicious_update).item()
-            
-            if dist_to_global > self.d_T:
-                # Hard constraint: project to satisfy d ≤ d_T
-                scale_factor = self.d_T / dist_to_global
-                malicious_update = malicious_update * scale_factor
-                final_norm = torch.norm(malicious_update).item()
-                print(f"    [Attacker {self.client_id}] Applied hard constraint projection: "
-                      f"scaled from {dist_to_global:.4f} to {final_norm:.4f}")
+        if self.use_lagrangian_dual:
+            # Lagrangian机制：约束可能轻微违反，这是正常的
+            # 根据论文，Lagrangian机制允许轻微的约束违反，由乘数来控制
+            if self.d_T is not None:
+                dist_to_global = torch.norm(malicious_update).item()
+                constraint_violation = max(0, dist_to_global - self.d_T)
+                if constraint_violation > 0:
+                    lambda_val = self.lambda_dt.item() if isinstance(self.lambda_dt, torch.Tensor) else self.lambda_dt
+                    print(f"    [Attacker {self.client_id}] Constraint(4b) violation: {constraint_violation:.6f} "
+                          f"(λ={lambda_val:.4f})")
+                    # 可选: 如果严重违反，可以进行轻微投影
+                    # 但通常Lagrangian机制应该能控制约束
+                    if constraint_violation > self.d_T * 0.3:  # 如果违反超过30%
+                        scale_factor = (self.d_T * 1.1) / dist_to_global
+                        malicious_update = malicious_update * scale_factor
+                        print(f"      Applied soft projection due to severe violation")
+        else:
+            # 硬约束投影机制（原有逻辑）
+            if self.d_T is not None:
+                # Compute distance from global model
+                # Approximation: d(w'_j, w'_g) ≈ ||w'_j - w_g||
+                # This is exact when attacker weight is small
+                dist_to_global = torch.norm(malicious_update).item()
+                
+                if dist_to_global > self.d_T:
+                    # Hard constraint: project to satisfy d ≤ d_T
+                    scale_factor = self.d_T / dist_to_global
+                    malicious_update = malicious_update * scale_factor
+                    final_norm = torch.norm(malicious_update).item()
+                    print(f"    [Attacker {self.client_id}] Applied hard constraint projection: "
+                          f"scaled from {dist_to_global:.4f} to {final_norm:.4f}")
         
         # Compute final attack objective value for logging
         # Use evaluation max_batches for more accurate final assessment
@@ -1593,10 +1735,18 @@ class AttackerClient(Client):
             del sel_benign_gpu, sel_stack, sel_mean, distances
         
         malicious_norm = torch.norm(malicious_update).item()
-        print(f"    [Attacker {self.client_id}] GRMP Attack: "
-              f"F(w'_g)={final_global_loss.item():.4f}, "
-              f"||w'_j||={malicious_norm:.4f}, "
-              f"constraint_c={constraint_c_value.item():.4f}")
+        log_msg = f"    [Attacker {self.client_id}] GRMP Attack: " \
+                  f"F(w'_g)={final_global_loss.item():.4f}, " \
+                  f"||w'_j||={malicious_norm:.4f}, " \
+                  f"constraint_c={constraint_c_value.item():.4f}"
+        
+        # 如果使用Lagrangian机制，显示乘数值
+        if self.use_lagrangian_dual and self.lambda_dt is not None and self.rho_dt is not None:
+            lambda_val = self.lambda_dt.item() if isinstance(self.lambda_dt, torch.Tensor) else self.lambda_dt
+            rho_val = self.rho_dt.item() if isinstance(self.rho_dt, torch.Tensor) else self.rho_dt
+            log_msg += f", λ={lambda_val:.4f}, ρ={rho_val:.4f}"
+        
+        print(log_msg)
         
         # Move malicious_update to CPU before returning to free GPU memory
         malicious_update_cpu = malicious_update.cpu()
