@@ -1519,12 +1519,56 @@ class AttackerClient(Client):
             self._ensure_model_on_device(self.model, target_device)
             self._model_on_gpu = True
         
+        # OPTIMIZATION 2: Cache constraint (4c) value before optimization loop
+        # Constraint (4c): Σ β'_{i,j}(t)^* d(w_i(t), w̄_i(t)) is a constant during optimization
+        # because selected_benign does not change during the loop
+        constraint_c_value_for_update = 0.0  # Used for updating ρ
+        constraint_c_term_base = None  # Cached base term for Lagrangian mode (on GPU)
+        
+        if self.gamma is not None and len(selected_benign) > 0:
+            # Compute constraint (4c) value once before loop (constant value)
+            sel_benign_gpu = [u.to(self.device) for u in selected_benign]
+            sel_stack = torch.stack(sel_benign_gpu)
+            sel_mean = sel_stack.mean(dim=0)
+            distances = torch.norm(sel_stack - sel_mean, dim=1)
+            agg_dist = distances.sum()  # Σ β'_{i,j}(t)^* d(...)
+            constraint_c_value_for_update = agg_dist.item()
+            
+            # For Lagrangian mode, cache the base term on GPU to avoid recomputation
+            if self.use_lagrangian_dual:
+                constraint_c_term_base = agg_dist  # Keep on GPU for reuse in loop
+            else:
+                # Hard constraint mode: release GPU memory immediately
+                del sel_benign_gpu, sel_stack, sel_mean, distances
+                torch.cuda.empty_cache()
+        
+        # OPTIMIZATION 5: Cache Lagrangian multipliers on GPU before loop
+        # Ensure multipliers are on correct device to avoid repeated conversions
+        if self.use_lagrangian_dual and self.lambda_dt is not None and self.rho_dt is not None:
+            if isinstance(self.lambda_dt, torch.Tensor):
+                if not self._device_matches(self.lambda_dt.device, target_device):
+                    self.lambda_dt = self.lambda_dt.to(target_device)
+            else:
+                self.lambda_dt = torch.tensor(self.lambda_dt, device=target_device)
+            
+            if isinstance(self.rho_dt, torch.Tensor):
+                if not self._device_matches(self.rho_dt.device, target_device):
+                    self.rho_dt = self.rho_dt.to(target_device)
+            else:
+                self.rho_dt = torch.tensor(self.rho_dt, device=target_device)
+        
         for step in range(self.proxy_steps):
             proxy_opt.zero_grad()
             
-            # CRITICAL: Before each forward pass, ensure model is still on GPU
-            # Verify all parameters are on correct device
-            self._ensure_model_on_device(self.model, target_device)
+            # OPTIMIZATION 4: Reduce device check frequency (every 5 steps instead of every step)
+            # Model should remain on GPU during optimization loop, so full check is rarely needed
+            if step % 5 == 0:  # Check every 5 steps
+                # Quick check using a sample parameter
+                sample_param = next(iter(self.model.parameters()), None)
+                if sample_param is not None and not self._device_matches(sample_param.device, target_device):
+                    # If device mismatch detected, perform full check
+                    self._ensure_model_on_device(self.model, target_device)
+            # Note: Full device check removed from here for performance (checked before loop and every 5 steps)
             
             # ============================================================
             # Compute base objective function F(w'_g(t))
@@ -1540,38 +1584,37 @@ class AttackerClient(Client):
             # Build optimization objective: choose mechanism based on whether using Lagrangian Dual
             # ============================================================
             
-            # CRITICAL: Before backward, ensure all model parameters are still on GPU
-            # This is essential for LoRA models where base model params might have been moved
-            self._ensure_model_on_device(self.model, target_device)
+            # OPTIMIZATION 4: Device check before backward (only if needed)
+            # Full device check is expensive, but we need it before backward for LoRA models
+            # Check every step before backward to ensure correctness
+            device_mismatch_before_backward = False
+            sample_param_before_backward = next(iter(self.model.parameters()), None)
+            if sample_param_before_backward is not None and not self._device_matches(sample_param_before_backward.device, target_device):
+                # If mismatch detected, perform full check
+                self._ensure_model_on_device(self.model, target_device)
+                device_mismatch_before_backward = True
             
             if self.use_lagrangian_dual and self.lambda_dt is not None and self.rho_dt is not None:
                 # ========== Use Lagrangian Dual mechanism (paper eq:lagrangian and eq:wprime_sub) ==========
                 
-                # Ensure Lagrangian multipliers are on correct device
-                lambda_dt_tensor = self.lambda_dt.to(self.device) if isinstance(self.lambda_dt, torch.Tensor) else torch.tensor(self.lambda_dt, device=self.device)
-                rho_dt_tensor = self.rho_dt.to(self.device) if isinstance(self.rho_dt, torch.Tensor) else torch.tensor(self.rho_dt, device=self.device)
+                # OPTIMIZATION 5: Use cached multipliers directly (already on correct device)
+                lambda_dt_tensor = self.lambda_dt  # Direct use, no conversion needed
+                rho_dt_tensor = self.rho_dt  # Direct use, no conversion needed
                 
                 # Constraint (4b): d(w'_j(t), w'_g(t)) ≤ d_T
                 # Paper formula eq:wprime_sub: -λ d(w'_j(t), w'_g(t))
                 # Approximation: d(w'_j, w'_g) ≈ ||w'_j|| (when attacker weight is small)
-                dist_to_global = torch.norm(proxy_param.view(-1))
-                constraint_b_term = -lambda_dt_tensor * dist_to_global
+                # OPTIMIZATION 3: Calculate dist_to_global once for objective function
+                dist_to_global_for_objective = torch.norm(proxy_param.view(-1))
+                constraint_b_term = -lambda_dt_tensor * dist_to_global_for_objective
                 
                 # Constraint (4c): Σ β'_{i,j}(t) d(w_i(t), w̄_i(t)) ≤ Γ
                 # Paper formula eq:wprime_sub: +ρ Σ_{i=1}^I β'_{i,j}(t)^* d(w_i(t), w̄_i(t))
-                # Note: β'_{i,j}(t)^* is already selected, so Σ(...) is a constant term
+                # OPTIMIZATION 2: Use cached constraint (4c) value (computed before loop)
                 constraint_c_term = torch.tensor(0.0, device=self.device)
-                constraint_c_value_for_update = 0.0  # Used for updating ρ
-                if self.gamma is not None and len(selected_benign) > 0:
-                    sel_benign_gpu = [u.to(self.device) for u in selected_benign]
-                    sel_stack = torch.stack(sel_benign_gpu)
-                    sel_mean = sel_stack.mean(dim=0)
-                    distances = torch.norm(sel_stack - sel_mean, dim=1)
-                    agg_dist = distances.sum()  # Σ β'_{i,j}(t)^* d(...)
-                    constraint_c_value_for_update = agg_dist.item()
-                    # Paper formula eq:wprime_sub: this term is +ρ Σ(...)
-                    constraint_c_term = rho_dt_tensor * agg_dist
-                    del sel_benign_gpu, sel_stack, sel_mean, distances
+                if constraint_c_term_base is not None:
+                    # Use cached base term (already on GPU)
+                    constraint_c_term = rho_dt_tensor * constraint_c_term_base
                 
                 # ============================================================
                 # Build Lagrangian objective function (paper formula eq:wprime_sub)
@@ -1583,7 +1626,7 @@ class AttackerClient(Client):
                 # ============================================================
                 # Compute constraint violations (for updating λ and ρ)
                 # ============================================================
-                constraint_b_violation = F.relu(dist_to_global - self.d_T) if self.d_T is not None else torch.tensor(0.0, device=self.device)
+                constraint_b_violation = F.relu(dist_to_global_for_objective - self.d_T) if self.d_T is not None else torch.tensor(0.0, device=self.device)
             
                 constraint_c_violation = torch.tensor(0.0, device=self.device)
                 if self.gamma is not None and len(selected_benign) > 0:
@@ -1595,38 +1638,31 @@ class AttackerClient(Client):
                 lagrangian_objective = -global_loss
                 
                 # Compute constraint violations (for logging only)
+                # OPTIMIZATION 3: Calculate dist_to_global once
                 dist_to_global = torch.norm(proxy_param.view(-1)) if self.d_T is not None else torch.tensor(0.0, device=self.device)
                 constraint_b_violation = F.relu(dist_to_global - self.d_T) if self.d_T is not None else torch.tensor(0.0, device=self.device)
                 
+                # OPTIMIZATION 6: Constraint (4c) calculation moved to after loop for hard constraint mode
+                # In hard constraint mode, constraint (4c) is only used for logging, not in optimization
+                # So we can delay its computation until after the loop
                 constraint_c_violation = torch.tensor(0.0, device=self.device)
-                constraint_c_value_for_update = 0.0
-                if self.gamma is not None and len(selected_benign) > 0:
-                    sel_benign_gpu = [u.to(self.device) for u in selected_benign]
-                    sel_stack = torch.stack(sel_benign_gpu)
-                    sel_mean = sel_stack.mean(dim=0)
-                    distances = torch.norm(sel_stack - sel_mean, dim=1)
-                    agg_dist = distances.sum()
-                    constraint_c_value_for_update = agg_dist.item()
-                    constraint_c_violation = F.relu(agg_dist - self.gamma)
-                    del sel_benign_gpu, sel_stack, sel_mean, distances
+                # constraint_c_value_for_update is already computed before loop (for Lagrangian mode compatibility)
             
             # CRITICAL: Before backward pass, ensure ALL model parameters and buffers are on GPU
             # This is essential for LoRA models where nested structures might have been affected
             # The computation graph created during forward pass references these parameters
             # If any parameter is on CPU during backward, we'll get a device mismatch error
-            device_mismatch_before_backward = False
-            for name, param in self.model.named_parameters():
-                if not self._device_matches(param.device, target_device):
-                    print(f"    [Attacker {self.client_id}] CRITICAL PRE-BACKWARD: Parameter {name} on {param.device}, forcing to {target_device}")
-                    with torch.no_grad():
-                        param.data = param.data.to(target_device, non_blocking=True)
-                    device_mismatch_before_backward = True
-            for name, buffer in self.model.named_buffers():
-                if not self._device_matches(buffer.device, target_device):
-                    print(f"    [Attacker {self.client_id}] CRITICAL PRE-BACKWARD: Buffer {name} on {buffer.device}, forcing to {target_device}")
-                    buffer.data = buffer.data.to(target_device, non_blocking=True)
-                    device_mismatch_before_backward = True
+            # OPTIMIZATION 4: Only perform full check if mismatch was detected by sample check
             if device_mismatch_before_backward:
+                for name, param in self.model.named_parameters():
+                    if not self._device_matches(param.device, target_device):
+                        print(f"    [Attacker {self.client_id}] CRITICAL PRE-BACKWARD: Parameter {name} on {param.device}, forcing to {target_device}")
+                        with torch.no_grad():
+                            param.data = param.data.to(target_device, non_blocking=True)
+                for name, buffer in self.model.named_buffers():
+                    if not self._device_matches(buffer.device, target_device):
+                        print(f"    [Attacker {self.client_id}] CRITICAL PRE-BACKWARD: Buffer {name} on {buffer.device}, forcing to {target_device}")
+                        buffer.data = buffer.data.to(target_device, non_blocking=True)
                 print(f"    [Attacker {self.client_id}] WARNING: Fixed device mismatches before backward pass")
                 # Final recursive check to ensure everything is consistent
                 self._ensure_model_on_device(self.model, target_device)
@@ -1655,6 +1691,8 @@ class AttackerClient(Client):
                 # When constraint is violated (constraint value > bound), subgradient > 0, λ increases to penalize violation
                 
                 if self.d_T is not None:
+                    # OPTIMIZATION 3: Calculate dist_to_global after step() (proxy_param has been updated)
+                    # Cannot reuse dist_to_global_for_objective because proxy_param changed after step()
                     current_dist = torch.norm(proxy_param.view(-1)).item()
                     lambda_val = self.lambda_dt.item() if isinstance(self.lambda_dt, torch.Tensor) else self.lambda_dt
                     # Subgradient: d(w'_j, w'_g) - d_T
@@ -1662,7 +1700,8 @@ class AttackerClient(Client):
                     subgradient_b = current_dist - self.d_T
                     new_lambda = lambda_val + self.lambda_lr * subgradient_b
                     new_lambda = max(0.0, new_lambda)  # Ensure non-negative
-                    self.lambda_dt = torch.tensor(new_lambda, requires_grad=False)
+                    # OPTIMIZATION 5: Keep multiplier on same device when updating
+                    self.lambda_dt = torch.tensor(new_lambda, device=target_device, requires_grad=False)
                 
                 if self.gamma is not None and len(selected_benign) > 0:
                     rho_val = self.rho_dt.item() if isinstance(self.rho_dt, torch.Tensor) else self.rho_dt
@@ -1671,7 +1710,8 @@ class AttackerClient(Client):
                     subgradient_c = constraint_c_value_for_update - self.gamma
                     new_rho = rho_val + self.rho_lr * subgradient_c
                     new_rho = max(0.0, new_rho)  # Ensure non-negative
-                    self.rho_dt = torch.tensor(new_rho, requires_grad=False)
+                    # OPTIMIZATION 5: Keep multiplier on same device when updating
+                    self.rho_dt = torch.tensor(new_rho, device=target_device, requires_grad=False)
             
             # ============================================================
             # Modification 4: Add constraint safeguard mechanism within optimization loop (Lagrangian framework)
@@ -1687,13 +1727,17 @@ class AttackerClient(Client):
                 # Modification 4: Constraint safeguard under Lagrangian mechanism
                 # Check within optimization loop, if violation exceeds 20%, immediately apply light projection to prevent path deviation
                 # This maintains Lagrangian flexibility while ensuring constraints are promptly safeguarded
-                dist_to_global = torch.norm(proxy_param).item()
-                violation_ratio = (dist_to_global - self.d_T) / self.d_T if self.d_T > 0 else 0.0
+                # OPTIMIZATION 3: Reuse current_dist calculated above for λ update if available
+                # Note: current_dist was calculated after step() in the λ update section, so it's the updated value
+                # We calculate it here again to ensure we have the value (avoiding scope issues)
+                dist_to_global_for_projection = torch.norm(proxy_param.view(-1)).item()
+                
+                violation_ratio = (dist_to_global_for_projection - self.d_T) / self.d_T if self.d_T > 0 else 0.0
                 
                 if violation_ratio > 0.20:  # Apply light projection when violation exceeds 20%
                     # Light projection to 1.1 × d_T, leaving 10% margin to allow Lagrangian to continue optimizing
                     target_dist = self.d_T * 1.1
-                    scale_factor = target_dist / dist_to_global
+                    scale_factor = target_dist / dist_to_global_for_projection
                     proxy_param.data = proxy_param.data * scale_factor
         
         malicious_update = proxy_param.detach()
@@ -1762,16 +1806,22 @@ class AttackerClient(Client):
         final_global_loss = self._proxy_global_loss(malicious_update, max_batches=self.proxy_max_batches_eval, skip_dim_check=False)
         
         # Compute constraint (4c) for logging
-        constraint_c_value = torch.tensor(0.0, device=self.device)
-        if self.gamma is not None and len(selected_benign) > 0:
-            # Move selected_benign to GPU temporarily for computation
-            sel_benign_gpu = [u.to(self.device) for u in selected_benign]
-            sel_stack = torch.stack(sel_benign_gpu)
-            sel_mean = sel_stack.mean(dim=0)
-            distances = torch.norm(sel_stack - sel_mean, dim=1)
-            constraint_c_value = distances.sum()  # This returns a scalar tensor (0-dim), safe for .item()
-            # Clean up GPU references
-            del sel_benign_gpu, sel_stack, sel_mean, distances
+        # OPTIMIZATION 2 & 6: For Lagrangian mode, reuse cached value; for hard constraint mode, compute here
+        if self.use_lagrangian_dual and constraint_c_value_for_update > 0:
+            # Reuse cached value from before loop (already computed)
+            constraint_c_value = torch.tensor(constraint_c_value_for_update, device=self.device)
+        else:
+            # Hard constraint mode: compute here (only needed for logging)
+            constraint_c_value = torch.tensor(0.0, device=self.device)
+            if self.gamma is not None and len(selected_benign) > 0:
+                # Move selected_benign to GPU temporarily for computation
+                sel_benign_gpu = [u.to(self.device) for u in selected_benign]
+                sel_stack = torch.stack(sel_benign_gpu)
+                sel_mean = sel_stack.mean(dim=0)
+                distances = torch.norm(sel_stack - sel_mean, dim=1)
+                constraint_c_value = distances.sum()  # This returns a scalar tensor (0-dim), safe for .item()
+                # Clean up GPU references
+                del sel_benign_gpu, sel_stack, sel_mean, distances
         
         malicious_norm = torch.norm(malicious_update).item()
         log_msg = f"    [Attacker {self.client_id}] GRMP Attack: " \

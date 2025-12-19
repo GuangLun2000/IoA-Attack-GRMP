@@ -76,16 +76,27 @@ class Server:
         print("  📊 Using mixed similarity computation")
 
         # Step 1: Compute pairwise similarities
+        # OPTIMIZATION 1: Use symmetry to reduce computation by ~50%
+        # cosine_similarity(a, b) == cosine_similarity(b, a), so we only need upper triangle
+        pairwise_sims_matrix = {}  # Store (i, j): sim_value for reuse
         pairwise_sims = []
+        
         for i in range(n_updates):
             other_sims = []
-            for j in range(n_updates):
-                if i != j:
-                    sim = torch.cosine_similarity(
-                        updates[i].unsqueeze(0),
-                        updates[j].unsqueeze(0)
-                    ).item()
-                    other_sims.append(sim)
+            # Compute similarities with j > i (upper triangle)
+            for j in range(i + 1, n_updates):
+                sim = torch.cosine_similarity(
+                    updates[i].unsqueeze(0),
+                    updates[j].unsqueeze(0)
+                ).item()
+                pairwise_sims_matrix[(i, j)] = sim
+                pairwise_sims_matrix[(j, i)] = sim  # Use symmetry
+                other_sims.append(sim)
+            
+            # For j < i, use already computed symmetric values
+            for j in range(i):
+                other_sims.append(pairwise_sims_matrix[(i, j)])
+            
             # Use average instead of median (more lenient)
             avg_sim = np.mean(other_sims) if other_sims else 0
             pairwise_sims.append(avg_sim)
