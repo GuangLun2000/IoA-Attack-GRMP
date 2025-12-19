@@ -39,21 +39,21 @@ plt.rcParams['lines.markersize'] = 5
 # Colors are carefully selected to be easily distinguishable in both print and screen
 IEEE_COLORS = {
     'benign': [
-        '#0066CC',  # Blue (Device 1)
-        '#FF6600',  # Orange (Device 2) 
-        '#00B050',  # Green (Device 3)
-        '#FFC000',  # Amber/Yellow (Device 4)
-        '#7030A0',  # Purple (Device 5)
-        '#C55A11',  # Brown (Device 6)
-        '#70AD47',  # Light Green (Device 7)
-        '#5B9BD5',  # Light Blue (Device 8)
-        '#2E75B6',  # Dark Blue (Device 9)
-        '#0070C0',  # Cyan Blue (Device 10)
-        '#954F72',  # Rose (Device 11)
-        '#1F4E79',  # Navy (Device 12)
-        '#000000',  # Black (Device 13)
-        '#C00000',  # Red (Device 14) - use carefully, distinguish from attackers
-        '#FF0000'   # Bright Red (Device 15)
+        '#0066CC',  # Blue (Agent 1)
+        '#FF6600',  # Orange (Agent 2) 
+        '#00B050',  # Green (Agent 3)
+        '#FFC000',  # Amber/Yellow (Agent 4)
+        '#7030A0',  # Purple (Agent 5)
+        '#C55A11',  # Brown (Agent 6)
+        '#70AD47',  # Light Green (Agent 7)
+        '#5B9BD5',  # Light Blue (Agent 8)
+        '#2E75B6',  # Dark Blue (Agent 9)
+        '#0070C0',  # Cyan Blue (Agent 10)
+        '#954F72',  # Rose (Agent 11)
+        '#1F4E79',  # Navy (Agent 12)
+        '#000000',  # Black (Agent 13)
+        '#C00000',  # Red (Agent 14) - use carefully, distinguish from attackers
+        '#FF0000'   # Bright Red (Agent 15)
     ],
     'attacker': [
         '#DC143C',  # Crimson (Attacker 1)
@@ -147,7 +147,7 @@ class ExperimentVisualizer:
         plt.tight_layout()
         
         out_path = save_path or (self.results_dir / 'figure3_global_accuracy_stability.png')
-        plt.savefig(out_path, dpi=300, bbox_inches='tight')
+        plt.savefig(out_path, dpi=600, bbox_inches='tight')
         print(f"  ✅ Saved Figure 3 to: {out_path}")
         plt.close()
     
@@ -318,7 +318,7 @@ class ExperimentVisualizer:
             marker = IEEE_MARKERS['benign'][i % len(IEEE_MARKERS['benign'])]
             ax.plot(rounds, sims, '-', color=color, linewidth=1.5,
                    marker=marker, markersize=4, markevery=max(1, len(rounds)//15),
-                   label=f'Device {client_data["id"]+1}', zorder=2,
+                   label=f'Agent {client_data["id"]+1}', zorder=2,
                    markerfacecolor=color, markeredgecolor='white', markeredgewidth=0.5)
         
         # Plot attacker agents - IEEE style red/orange (use aligned data)
@@ -356,11 +356,11 @@ class ExperimentVisualizer:
         plt.tight_layout(rect=[0, 0, 0.85, 1])  # [left, bottom, right, top] - leave 15% space on right
         
         if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            plt.savefig(save_path, dpi=600, bbox_inches='tight')
             print(f"  ✅ Saved Figure 4 to: {save_path}")
         else:
             plt.savefig(self.results_dir / 'figure4_cosine_similarity.png', 
-                       dpi=300, bbox_inches='tight')
+                       dpi=600, bbox_inches='tight')
         plt.close()
     
     def plot_figure6_local_accuracy_with_attack(self, local_accuracies: Dict[int, List[float]], 
@@ -405,7 +405,7 @@ class ExperimentVisualizer:
                 marker = IEEE_MARKERS['benign'][i % len(IEEE_MARKERS['benign'])]
                 ax.plot(rounds, accs_pct, '-', color=color, linewidth=1.5,
                        marker=marker, markersize=4, markevery=max(1, len(rounds)//20),
-                       label=f'Device {client_id+1}', zorder=2,
+                       label=f'Agent {client_id+1}', zorder=2,
                        markerfacecolor=color, markeredgecolor='white', markeredgewidth=0.5)
             else:
                 print(f"  ⚠️  Warning: Benign Client {client_id} - accs length ({len(accs)}) != rounds length ({len(rounds)})")
@@ -467,11 +467,11 @@ class ExperimentVisualizer:
         plt.tight_layout(rect=[0, 0, 0.85, 1])  # Leave 15% space on right for legend
         
         if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            plt.savefig(save_path, dpi=600, bbox_inches='tight')
             print(f"  ✅ Saved Figure 6 to: {save_path}")
         else:
             plt.savefig(self.results_dir / 'figure6_local_accuracy_with_attack.png', 
-                       dpi=300, bbox_inches='tight')
+                       dpi=600, bbox_inches='tight')
         plt.close()
     
     def generate_all_figures(self, server_log_data: List[Dict], 
