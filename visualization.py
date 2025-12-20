@@ -305,10 +305,10 @@ class ExperimentVisualizer:
                 center = (y_min + y_max) / 2
                 y_min_adjusted = max(0.0, center - 0.1)
                 y_max_adjusted = min(1.0, center + 0.1)
-        else:
-            # Fallback to default range if no data
-            y_min_adjusted = 0.0
-            y_max_adjusted = 1.0
+            else:
+                # Fallback to default range if no data
+                y_min_adjusted = 0.0
+                y_max_adjusted = 1.0
         
         # Plot benign agents - IEEE style colors (use aligned data)
         for i, client_data in enumerate(aligned_benign_data):
@@ -346,14 +346,12 @@ class ExperimentVisualizer:
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
         
-        # IEEE-style legend: place outside plot area to avoid blocking data
-        # Use bbox_to_anchor to position legend outside the plot
-        legend = ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1.0), 
-                          frameon=True, fancybox=False, shadow=False,
+        # IEEE-style legend: place inside plot area, use 'best' location to avoid blocking data
+        # 'best' automatically finds the best location that minimizes overlap with plot elements
+        legend = ax.legend(loc='best', frameon=True, fancybox=False, shadow=False,
                           edgecolor='black', framealpha=1.0, fontsize=9, 
                           ncol=1, columnspacing=0.5)
-        # Adjust layout to make room for legend outside the plot
-        plt.tight_layout(rect=[0, 0, 0.85, 1])  # [left, bottom, right, top] - leave 15% space on right
+        plt.tight_layout()
         
         if save_path:
             plt.savefig(save_path, dpi=600, bbox_inches='tight')
@@ -543,14 +541,12 @@ class ExperimentVisualizer:
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
         
-        # IEEE-style legend: place outside plot area to avoid blocking data
-        # Use bbox_to_anchor to position legend outside the plot
-        legend = ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1.0), 
-                          frameon=True, fancybox=False, shadow=False,
+        # IEEE-style legend: place inside plot area, use 'best' location to avoid blocking data
+        # 'best' automatically finds the best location that minimizes overlap with plot elements
+        legend = ax.legend(loc='best', frameon=True, fancybox=False, shadow=False,
                           edgecolor='black', framealpha=1.0, fontsize=9, 
                           ncol=1, columnspacing=0.5)
-        # Adjust layout to make room for legend outside the plot
-        plt.tight_layout(rect=[0, 0, 0.85, 1])  # [left, bottom, right, top] - leave 15% space on right
+        plt.tight_layout()
         
         if save_path:
             plt.savefig(save_path, dpi=600, bbox_inches='tight')
@@ -655,13 +651,12 @@ class ExperimentVisualizer:
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
         
-        # IEEE-style legend: place outside plot area to avoid blocking data
-        legend = ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1.0), 
-                          frameon=True, fancybox=False, shadow=False,
+        # IEEE-style legend: place inside plot area, use 'best' location to avoid blocking data
+        # 'best' automatically finds the best location that minimizes overlap with plot elements
+        legend = ax.legend(loc='best', frameon=True, fancybox=False, shadow=False,
                           edgecolor='black', framealpha=1.0, fontsize=9, 
                           ncol=1, columnspacing=0.5)
-        # Adjust layout to make room for legend outside the plot
-        plt.tight_layout(rect=[0, 0, 0.85, 1])  # Leave 15% space on right for legend
+        plt.tight_layout()
         
         if save_path:
             plt.savefig(save_path, dpi=600, bbox_inches='tight')
