@@ -708,7 +708,7 @@ def main():
         'graph_threshold': 0.5,  # Threshold for graph adjacency matrix binarization in VGAE (float, 0.0-1.0)
         
         # ========== Defense Mechanism Parameters ==========
-        'enable_defense': False,  # Whether to enable defense mechanism (bool, True/False)
+        'enable_defense': False,  # Whether to enable defense mechanism (bool, True/False) Fasle for attack baseline experiment.
                                       # Note: When False, defense filtering is disabled but 
                                       # Cosine Similarity and Euclidean Distance are still computed for visualization
         'defense_threshold': 0.1,  # Base threshold for defense mechanism (float, lower = more strict)
