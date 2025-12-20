@@ -690,7 +690,7 @@ def main():
                                       # If True, uses Lagrangian penalty terms (per paper eq:lagrangian and eq:wprime_sub)
         'lambda_init': 0.1,  # Initial λ(t) value (λ(1)≥0, per paper Algorithm 1)
         'rho_init': 0.1,     # Initial ρ(t) value (ρ(1)≥0, per paper Algorithm 1)
-        'lambda_lr': 0.001,  # Learning rate for λ(t) update (subgradient step size) - Reduced from 0.01 to 0.001 for improved stability
+        'lambda_lr': 0.001,  # Learning rate for λ(t) update (subgradient step size)
         'rho_lr': 0.001,      # Learning rate for ρ(t) update (subgradient step size)
         # 'attacker_claimed_data_size': None,  # If None, uses actual assigned data size (recommended for realistic scenario)
         # If set to a value, overrides actual data size (for attack experiments where attacker claims more data)
@@ -708,7 +708,7 @@ def main():
         'graph_threshold': 0.5,  # Threshold for graph adjacency matrix binarization in VGAE (float, 0.0-1.0)
         
         # ========== Defense Mechanism Parameters ==========
-        'enable_defense': False,  # Whether to enable defense mechanism (bool, True/False)
+        'enable_defense': True,  # Whether to enable defense mechanism (bool, True/False)
             # Set to False to disable defense for faster testing or baseline experiments
         'defense_threshold': 0,  # Base threshold for defense mechanism (float, lower = more strict)
             # Set to 0 for attack baseline experiment. Baseline 0.3
