@@ -363,6 +363,203 @@ class ExperimentVisualizer:
                        dpi=600, bbox_inches='tight')
         plt.close()
     
+    def plot_figure4_euclidean_distance(self, log_data: List[Dict], 
+                                        attacker_ids: Optional[List[int]] = None,
+                                        save_path: Optional[str] = None,
+                                        num_rounds: Optional[int] = None,
+                                        num_clients: Optional[int] = None,
+                                        num_attackers: Optional[int] = None):
+        """
+        Figure 4: Temporal evolution of Euclidean distance for each LLM agent 
+        from the mean update over communication rounds.
+        
+        This figure shows how far each client's update is from the average update,
+        which can help identify outliers (potentially malicious clients).
+        
+        Args:
+            log_data: List of round logs
+            attacker_ids: List of attacker client IDs (if None, will infer from num_clients and num_attackers)
+            save_path: Path to save the figure
+            num_rounds: Total number of rounds (for validation)
+            num_clients: Total number of clients (for inferring attacker_ids if not provided)
+            num_attackers: Number of attacker clients (for inferring attacker_ids if not provided)
+        """
+        rounds = [log['round'] for log in log_data]
+        
+        # Validate data length
+        if num_rounds is not None and len(rounds) != num_rounds:
+            print(f"  ⚠️  Warning: Figure 4 - Expected {num_rounds} rounds, got {len(rounds)}")
+            if len(rounds) < num_rounds:
+                # Pad missing rounds (distances will be handled in the loop)
+                expected_rounds = list(range(1, num_rounds + 1))
+                missing_rounds = [r for r in expected_rounds if r not in rounds]
+                # Add placeholder logs for missing rounds
+                if log_data:
+                    last_log = log_data[-1].copy()
+                    for r in missing_rounds:
+                        placeholder_log = last_log.copy()
+                        placeholder_log['round'] = r
+                        placeholder_log['defense'] = last_log.get('defense', {}).copy()
+                        log_data.append(placeholder_log)
+                    rounds = expected_rounds
+                print(f"     Padded {len(missing_rounds)} missing rounds")
+        
+        fig, ax = plt.subplots(figsize=(6.5, 5))
+        
+        # Extract Euclidean distances and client info from defense logs
+        # Build a mapping of client_id -> list of distances over rounds
+        client_distances = {}  # {client_id: [dist1, dist2, ...]}
+        
+        for log in log_data:
+            defense = log.get('defense', {})
+            euclidean_distances = defense.get('euclidean_distances', [])
+            accepted_clients = defense.get('accepted_clients', [])
+            rejected_clients = defense.get('rejected_clients', [])
+            
+            # Map distances to client IDs
+            # The euclidean_distances list is ordered by sorted client IDs (from aggregate_updates)
+            # Combine accepted and rejected to get all client IDs
+            all_client_ids = sorted(set(accepted_clients + rejected_clients))
+            
+            # Ensure we have the same number of distances as clients
+            if len(euclidean_distances) != len(all_client_ids):
+                # If mismatch, try to infer from the log structure
+                # Distances should match the order of sorted client IDs
+                print(f"  ⚠️  Warning: Distance count ({len(euclidean_distances)}) != client count ({len(all_client_ids)}) in round {log.get('round', '?')}")
+            
+            for i, client_id in enumerate(all_client_ids):
+                if client_id not in client_distances:
+                    client_distances[client_id] = []
+                
+                if i < len(euclidean_distances):
+                    client_distances[client_id].append(euclidean_distances[i])
+                else:
+                    # Pad with previous value or 0 if no previous value
+                    if len(client_distances[client_id]) > 0:
+                        client_distances[client_id].append(client_distances[client_id][-1])
+                    else:
+                        client_distances[client_id].append(0.0)
+        
+        # Separate into benign and attacker
+        all_ids = sorted(client_distances.keys())
+        if attacker_ids is None:
+            # Infer attacker_ids from num_clients and num_attackers
+            if num_clients is not None and num_attackers is not None:
+                attacker_ids_set = set(range(num_clients - num_attackers, num_clients))
+            else:
+                # Fallback: use all_ids to infer (assume last clients are attackers)
+                if num_attackers is not None:
+                    attacker_ids_set = set(all_ids[-num_attackers:]) if len(all_ids) >= num_attackers else set()
+                else:
+                    # Last resort: assume 2 attackers (old behavior)
+                    print("  ⚠️  Warning: Could not infer attacker_ids, assuming last 2 clients are attackers")
+                    attacker_ids_set = set(all_ids[-2:]) if len(all_ids) >= 2 else set()
+        else:
+            attacker_ids_set = set(attacker_ids)
+        
+        benign_clients = [{'id': cid, 'dists': client_distances[cid]} 
+                         for cid in all_ids if cid not in attacker_ids_set]
+        attacker_clients = [{'id': cid, 'dists': client_distances[cid]} 
+                           for cid in all_ids if cid in attacker_ids_set]
+        
+        # Collect all distance values for adaptive y-axis range (before plotting)
+        all_distance_values = []
+        
+        # Process benign clients - align and collect data
+        aligned_benign_data = []
+        for client in benign_clients:
+            dists = client['dists']
+            # Align distances with rounds length
+            if len(dists) < len(rounds):
+                dists = dists + [dists[-1] if len(dists) > 0 else 0.0] * (len(rounds) - len(dists))
+            elif len(dists) > len(rounds):
+                dists = dists[:len(rounds)]
+            if len(dists) == len(rounds):
+                all_distance_values.extend(dists)
+                aligned_benign_data.append({'id': client['id'], 'dists': dists})
+        
+        # Process attacker clients - align and collect data
+        aligned_attacker_data = []
+        for client in attacker_clients:
+            dists = client['dists']
+            if len(dists) < len(rounds):
+                dists = dists + [dists[-1] if len(dists) > 0 else 0.0] * (len(rounds) - len(dists))
+            elif len(dists) > len(rounds):
+                dists = dists[:len(rounds)]
+            if len(dists) == len(rounds):
+                all_distance_values.extend(dists)
+                aligned_attacker_data.append({'id': client['id'], 'dists': dists})
+        
+        # Calculate adaptive y-axis range with padding
+        if all_distance_values:
+            y_min = min(all_distance_values)
+            y_max = max(all_distance_values)
+            y_range = y_max - y_min
+            
+            # Add 10% padding on both sides
+            padding = max(y_range * 0.1, 0.01)  # At least 0.01 padding for distances
+            y_min_adjusted = max(0.0, y_min - padding)  # Don't go below 0
+            y_max_adjusted = y_max + padding
+            
+            # If range is very small, ensure minimum range
+            if y_max_adjusted - y_min_adjusted < y_max * 0.1:
+                center = (y_min + y_max) / 2
+                range_size = max(y_max * 0.1, 0.01)
+                y_min_adjusted = max(0.0, center - range_size / 2)
+                y_max_adjusted = center + range_size / 2
+        else:
+            # Fallback to default range if no data
+            y_min_adjusted = 0.0
+            y_max_adjusted = 1.0
+        
+        # Plot benign agents - IEEE style colors (use aligned data)
+        for i, client_data in enumerate(aligned_benign_data):
+            dists = client_data['dists']
+            # Use modulo to cycle through colors and markers if needed
+            color = IEEE_COLORS['benign'][i % len(IEEE_COLORS['benign'])]
+            marker = IEEE_MARKERS['benign'][i % len(IEEE_MARKERS['benign'])]
+            ax.plot(rounds, dists, '-', color=color, linewidth=1.5,
+                   marker=marker, markersize=4, markevery=max(1, len(rounds)//15),
+                   label=f'Agent {client_data["id"]+1}', zorder=2,
+                   markerfacecolor=color, markeredgecolor='white', markeredgewidth=0.5)
+        
+        # Plot attacker agents - IEEE style red/orange (use aligned data)
+        for i, client_data in enumerate(aligned_attacker_data):
+            dists = client_data['dists']
+            # Use modulo to cycle through colors and markers if needed
+            color = IEEE_COLORS['attacker'][i % len(IEEE_COLORS['attacker'])]
+            marker = IEEE_MARKERS['attacker'][i % len(IEEE_MARKERS['attacker'])]
+            ax.plot(rounds, dists, '-', color=color, linewidth=1.5,
+                   marker=marker, markersize=4, markevery=max(1, len(rounds)//15),
+                   label=f'Attacker {client_data["id"]+1}', zorder=2,
+                   markerfacecolor=color, markeredgecolor='white', markeredgewidth=0.5)
+        
+        # IEEE-style axes (y-axis range already calculated above)
+        ax.set_xlabel('Episodes', fontsize=11, fontweight='normal')
+        ax.set_ylabel('Euclidean Distance', fontsize=11, fontweight='normal')
+        ax.set_ylim([y_min_adjusted, y_max_adjusted])  # Adaptive y-axis range
+        ax.set_xlim([1, max(rounds) if rounds else 1])
+        ax.grid(True, alpha=0.2, linestyle='--', linewidth=0.5)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        
+        # IEEE-style legend: place outside plot area to avoid blocking data
+        # Use bbox_to_anchor to position legend outside the plot
+        legend = ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1.0), 
+                          frameon=True, fancybox=False, shadow=False,
+                          edgecolor='black', framealpha=1.0, fontsize=9, 
+                          ncol=1, columnspacing=0.5)
+        # Adjust layout to make room for legend outside the plot
+        plt.tight_layout(rect=[0, 0, 0.85, 1])  # [left, bottom, right, top] - leave 15% space on right
+        
+        if save_path:
+            plt.savefig(save_path, dpi=600, bbox_inches='tight')
+            print(f"  ✅ Saved Figure 4 to: {save_path}")
+        else:
+            plt.savefig(self.results_dir / 'figure4_euclidean_distance.png', 
+                       dpi=600, bbox_inches='tight')
+        plt.close()
+    
     def plot_figure6_local_accuracy_with_attack(self, local_accuracies: Dict[int, List[float]], 
                                                 rounds: List[int], 
                                                 attacker_ids: List[int],
@@ -566,6 +763,17 @@ class ExperimentVisualizer:
         else:
             print("  ⚠️  Figure 3 skipped: Local accuracies not available.")
             print("     Local accuracies are automatically tracked during training.")
+        
+        # Figure 4: Euclidean Distance (from attack experiment)
+        print("📊 Generating Figure 4: Euclidean Distance...")
+        self.plot_figure4_euclidean_distance(
+            server_log_data,
+            attacker_ids=attacker_ids,
+            save_path=self.results_dir / f'{experiment_name}_figure4.png',
+            num_rounds=num_rounds,
+            num_clients=num_clients,
+            num_attackers=num_attackers
+        )
         
         print("\n✅ All available figures generated successfully!")
         print(f"   Output directory: {self.results_dir}")

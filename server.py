@@ -140,6 +140,55 @@ class Server:
 
         return similarities
 
+    def _compute_euclidean_distances(self, updates: List[torch.Tensor]) -> np.ndarray:
+        """
+        Compute Euclidean distances between each update and the mean update.
+        
+        This is analogous to cosine similarity but uses Euclidean distance instead.
+        Each distance is computed as: ||update_i - mean_update||
+        
+        Args:
+            updates: List of client update tensors
+            
+        Returns:
+            numpy array of Euclidean distances (one per client)
+        """
+        n_updates = len(updates)
+        
+        print("  📊 Computing Euclidean distances")
+        
+        # Compute mean update
+        avg_update = torch.stack(updates).mean(dim=0)
+        
+        # Compute Euclidean distance for each update
+        distances = []
+        for update in updates:
+            # Euclidean distance: ||update - avg_update||
+            dist = torch.norm(update - avg_update).item()
+            distances.append(dist)
+        
+        distances = np.array(distances)
+        
+        # Print information
+        print(f"  📈 Euclidean Distance - Mean: {distances.mean():.6f}, "
+              f"Std Dev: {distances.std():.6f}")
+        
+        # Display distance for each client
+        attacker_ids = {client.client_id for client in self.clients if getattr(client, 'is_attacker', False)}
+        for i, dist in enumerate(distances):
+            if hasattr(self, '_sorted_client_ids') and i < len(self._sorted_client_ids):
+                client_id = self._sorted_client_ids[i]
+                client = next((c for c in self.clients if c.client_id == client_id), None)
+                if client:
+                    client_type = "Attacker" if getattr(client, 'is_attacker', False) else "Benign"
+                    print(f"    Client {client_id} ({client_type}): {dist:.6f}")
+                else:
+                    print(f"    Client {client_id}: {dist:.6f}")
+            else:
+                print(f"    Update {i}: {dist:.6f}")
+        
+        return distances
+
     def aggregate_updates(self, updates: List[torch.Tensor],
                           client_ids: List[int]) -> Dict:
         # Store client_ids for similarity display
@@ -176,13 +225,17 @@ class Server:
             
             # Return defense log with all clients accepted (for compatibility)
             similarities = torch.ones(len(updates), device=self.device).cpu().numpy()
+            euclidean_distances = self._compute_euclidean_distances(updates) if len(updates) > 0 else np.array([])
             defense_log = {
                 'similarities': similarities.tolist(),
+                'euclidean_distances': euclidean_distances.tolist() if len(euclidean_distances) > 0 else [],
                 'accepted_clients': client_ids.copy(),
                 'rejected_clients': [],
                 'threshold': 0.0,
                 'mean_similarity': 1.0,
                 'std_similarity': 0.0,
+                'mean_euclidean_distance': euclidean_distances.mean().item() if len(euclidean_distances) > 0 else 0.0,
+                'std_euclidean_distance': euclidean_distances.std().item() if len(euclidean_distances) > 0 else 0.0,
                 'tolerance_factor': self.tolerance_factor,
                 'rejection_rate': 0.0,
                 'aggregated_update_norm': aggregated_update_norm
@@ -223,13 +276,17 @@ class Server:
             
             # Return defense log with all clients accepted (for compatibility)
             similarities = torch.ones(len(updates), device=self.device).cpu().numpy()
+            euclidean_distances = self._compute_euclidean_distances(updates) if len(updates) > 0 else np.array([])
             defense_log = {
                 'similarities': similarities.tolist(),
+                'euclidean_distances': euclidean_distances.tolist() if len(euclidean_distances) > 0 else [],
                 'accepted_clients': client_ids.copy(),
                 'rejected_clients': [],
                 'threshold': 0.0,
                 'mean_similarity': 1.0,
                 'std_similarity': 0.0,
+                'mean_euclidean_distance': euclidean_distances.mean().item() if len(euclidean_distances) > 0 else 0.0,
+                'std_euclidean_distance': euclidean_distances.std().item() if len(euclidean_distances) > 0 else 0.0,
                 'tolerance_factor': self.tolerance_factor,
                 'rejection_rate': 0.0,
                 'aggregated_update_norm': aggregated_update_norm
@@ -243,6 +300,7 @@ class Server:
         Uses a more lenient defense mechanism and smooth update strategy.
         """
         similarities = self._compute_similarities(updates)
+        euclidean_distances = self._compute_euclidean_distances(updates)
 
         # Compute dynamic threshold (more lenient)
         mean_sim = similarities.mean()
@@ -312,11 +370,14 @@ class Server:
 
         defense_log = {
             'similarities': similarities.tolist(),
+            'euclidean_distances': euclidean_distances.tolist(),  # Add Euclidean distances
             'accepted_clients': [client_ids[i] for i in accepted_indices],
             'rejected_clients': [client_ids[i] for i in rejected_indices],
             'threshold': dynamic_threshold,
             'mean_similarity': mean_sim,
             'std_similarity': std_sim,
+            'mean_euclidean_distance': euclidean_distances.mean().item(),
+            'std_euclidean_distance': euclidean_distances.std().item(),
             'tolerance_factor': self.tolerance_factor,
             'rejection_rate': rejection_rate,
             'aggregated_update_norm': aggregated_update_norm
