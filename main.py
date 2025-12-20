@@ -585,7 +585,7 @@ def analyze_results(metrics):
 def run_no_attack_experiment(config_base: Dict) -> Dict:
     """
     Run a baseline experiment WITHOUT any attackers.
-        
+    
     Args:
         config_base: Base configuration dictionary
         
@@ -663,7 +663,7 @@ def main():
         # ========== Formula 4 Constraint Parameters ==========
         'd_T': 0.6,  # Tighter proximity for camouflage (closer to global)
         'gamma': 5.0,  # Tighter aggregation distance budget
-
+        
         # ========== VGAE Training Parameters ==========
         # Reference paper: input_dim=5, hidden1_dim=32, hidden2_dim=16, num_epoch=10, lr=0.01
         # Note: dim_reduction_size should be <= total trainable parameters
@@ -693,7 +693,7 @@ def main():
         'lambda_lr': 0.001,  # Learning rate for λ(t) update (subgradient step size) - Reduced from 0.01 to 0.001 for improved stability
         'rho_lr': 0.001,      # Learning rate for ρ(t) update (subgradient step size)
         # 'attacker_claimed_data_size': None,  # If None, uses actual assigned data size (recommended for realistic scenario)
-            # If set to a value, overrides actual data size (for attack experiments where attacker claims more data)
+        # If set to a value, overrides actual data size (for attack experiments where attacker claims more data)
         'attacker_claimed_data_size': None,  # None = use actual assigned data size (recommended)
         
         # ========== Proxy Loss Estimation Parameters ==========
@@ -710,7 +710,7 @@ def main():
         # ========== Defense Mechanism Parameters ==========
         'enable_defense': False,  # Whether to enable defense mechanism (bool, True/False)
             # Set to False to disable defense for faster testing or baseline experiments
-        'defense_threshold': 0,  # Base threshold for defense mechanism (float, lower = more strict) 
+        'defense_threshold': 0,  # Base threshold for defense mechanism (float, lower = more strict)
             # Set to 0 for attack baseline experiment. Baseline 0.3
         'tolerance_factor': 3.0,  # Tolerance factor for defense mechanism (float, higher = more lenient). Baseline experiment uses 3.0.
         'similarity_alpha': 0.5,  # Weight for pairwise similarities in mixed similarity computation (float, 0.0-1.0)
@@ -776,24 +776,24 @@ def main():
                 try:
                     with open(attack_path, 'r') as f:
                         attack_data = json.load(f)
-                        attack_local_accs = attack_data.get('local_accuracies', None)
-                        if attack_local_accs:
-                            print("  ✓ Found attack experiment data")
+                    attack_local_accs = attack_data.get('local_accuracies', None)
+                    if attack_local_accs:
+                        print("  ✓ Found attack experiment data")
                 except Exception as e:
                     print(f"  ⚠️  WARNING: Could not load attack data: {e}")
-            
-            # Generate Figures 3, 4, 6
+                    
+                    # Generate Figures 3, 4, 6
             if attack_local_accs:
-                visualizer.generate_all_figures(
-                    server_log_data=attack_results,
-                    local_accuracies=attack_local_accs,
-                    attacker_ids=attacker_ids,
+                    visualizer.generate_all_figures(
+                        server_log_data=attack_results,
+                        local_accuracies=attack_local_accs,
+                        attacker_ids=attacker_ids,
                     experiment_name=config['experiment_name'],
                     num_rounds=config['num_rounds'],
                     attack_start_round=config['attack_start_round'],
                     num_clients=config['num_clients'],
                     num_attackers=config['num_attackers']
-                )
+                    )
         
         analyze_results(attack_metrics)
         print("\n" + "=" * 60)
@@ -809,7 +809,7 @@ def main():
         
         results, metrics = run_experiment(config)
         analyze_results(metrics)
-
+        
 
 if __name__ == "__main__":
     main()

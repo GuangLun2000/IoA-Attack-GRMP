@@ -346,15 +346,15 @@ class Server:
                 # Use global test loader for fair comparison (same test set for all clients)
                 for batch in self.test_loader:
                     input_ids = batch['input_ids'].to(self.device)
-                    attention_mask = batch['attention_mask'].to(self.device)
-                    labels = batch['labels'].to(self.device)
-                    
-                    outputs = client.model(input_ids, attention_mask)
-                    predictions = torch.argmax(outputs, dim=1)
-                    
-                    correct += (predictions == labels).sum().item()
-                    total += labels.size(0)
-            
+                attention_mask = batch['attention_mask'].to(self.device)
+                labels = batch['labels'].to(self.device)
+                
+                outputs = client.model(input_ids, attention_mask)
+                predictions = torch.argmax(outputs, dim=1)
+                
+                correct += (predictions == labels).sum().item()
+                total += labels.size(0)
+        
             accuracy = correct / total if total > 0 else 0.0
         finally:
             # Move model back to CPU to free GPU memory
@@ -419,13 +419,32 @@ class Server:
         
         # Set global model params and constraint parameters for attackers (Formula 4)
         global_params = self.global_model.get_flat_params()  # Already on GPU (server model is on GPU)
+        
+        # Calculate total data size D(t) and benign client data sizes for Formula (2) and (3)
+        total_data_size = 0.0
+        benign_data_sizes = {}
+        for client in self.clients:
+            if getattr(client, 'is_attacker', False):
+                total_data_size += getattr(client, 'claimed_data_size', 1.0)
+            else:
+                client_data_size = len(getattr(client, 'data_indices', [])) or 1.0
+                benign_data_sizes[client.client_id] = client_data_size
+                total_data_size += client_data_size
+        
         for client in self.clients:
             if isinstance(client, AttackerClient):
                 client.set_global_model_params(global_params)
-                # Set constraint parameters: d_T and gamma
+                # Set constraint parameters: d_T, gamma, total_data_size, and benign_data_sizes
                 # d_T: distance threshold for proximity constraint (4b)
                 # gamma: upper bound for aggregation distance constraint (4c)
-                client.set_constraint_params(d_T=self.d_T, gamma=self.gamma)
+                # total_data_size: D(t) for Formula (2) and (3)
+                # benign_data_sizes: {client_id: D_i(t)} for Formula (2) and (3)
+                client.set_constraint_params(
+                    d_T=self.d_T, 
+                    gamma=self.gamma,
+                    total_data_size=total_data_size,
+                    benign_data_sizes=benign_data_sizes
+                )
 
         # Phase 1: Preparation
         print("\n🔧 Phase 1: Client Preparation")

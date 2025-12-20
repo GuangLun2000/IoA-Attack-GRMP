@@ -274,9 +274,12 @@ class AttackerClient(Client):
         self.proxy_loader = data_manager.get_proxy_eval_loader(sample_size=self.proxy_sample_size)
         
         # Formula 4 constraints parameters
-        self.d_T = None  # Distance threshold for constraint (4b): d(w'_j(t), w_g(t)) ≤ d_T
+        self.d_T = None  # Distance threshold for constraint (4b): d(w'_j(t), w'_g(t)) ≤ d_T
         self.gamma = None  # Upper bound for constraint (4c): Σ β'_{i,j}(t) d(w_i(t), w̄_i(t)) ≤ Γ
         self.global_model_params = None  # Store global model params for constraint (4b) (will be on GPU when needed)
+        # Paper Formula (2): w'_g(t) = Σ_{i=1}^I (D_i(t)/D(t)) β'_{i,j}(t) w_i(t) + (D'_j(t)/D(t)) w'_j(t)
+        self.total_data_size = None  # D(t): Total data size for aggregation weight calculation
+        self.benign_data_sizes = {}  # {client_id: D_i(t)}: Data sizes for each benign client
         
         # Lagrangian dual variables (λ(t) and ρ(t) from paper)
         # Initialized in set_lagrangian_params
@@ -749,11 +752,13 @@ class AttackerClient(Client):
                 global_params_gpu = self.global_model_params
             
             candidate_params = global_params_gpu + malicious_update
+            
             # Skip dimension check if already validated (performance optimization)
             param_dict = self._flat_to_param_dict(candidate_params, skip_dim_check=skip_dim_check)
             
             # CRITICAL FIX: Ensure all parameters in param_dict are on the correct device
-            # Normalize device: always use 'cuda:0' for consistency
+            # Normalize device: always use 'cuda:0' for consistency  
+            # Note: target_device already defined earlier, but redefining here for clarity
             target_device = torch.device('cuda:0') if self.device.type == 'cuda' else self.device
             for name, value in param_dict.items():
                 if not self._device_matches(value.device, target_device):
@@ -771,13 +776,13 @@ class AttackerClient(Client):
                     self._ensure_model_on_device(self.model, target_device)
             except StopIteration:
                 pass
-
+            
             total_loss = 0.0
             batches = 0
-
+            
             # Normalize device once for this batch loop
             target_device = torch.device('cuda:0') if self.device.type == 'cuda' else self.device
-
+            
             for batch in self.proxy_loader:
                 input_ids = batch['input_ids'].to(target_device)
                 attention_mask = batch['attention_mask'].to(target_device)
@@ -882,7 +887,7 @@ class AttackerClient(Client):
                         # Final verification before calling stateless.functional_call
                         self._ensure_model_on_device(self.model, target_device)
                         self.model.to(target_device)
-
+                        
                         logits = stateless.functional_call(
                             self.model,
                             param_dict,
@@ -1009,17 +1014,20 @@ class AttackerClient(Client):
                                         param.data.copy_(restored_value)
                             # Return zero loss as last resort
                             return torch.tensor(0.0, device=target_device)
-
+                
                 ce_loss = F.cross_entropy(logits, labels)
                 total_loss = total_loss + ce_loss
                 batches += 1
                 if batches >= max_batches:
                     break
-
+            
             if batches == 0:
                 result = torch.tensor(0.0, device=self.device)
             else:
                 result = total_loss / batches
+        except Exception as e:
+            print(f"    [Attacker {self.client_id}] Error in proxy loss computation: {e}")
+            result = torch.tensor(0.0, device=self.device)
         finally:
             # CRITICAL: Only move model back to CPU if keep_model_on_gpu=False
             # If keep_model_on_gpu=True, the loss will be used for backward pass,
@@ -1138,10 +1146,22 @@ class AttackerClient(Client):
         # Keep on same device as provided to avoid unnecessary transfers
         self.global_model_params = global_params.clone().detach().to(self.device)
     
-    def set_constraint_params(self, d_T: float = None, gamma: float = None):
-        """Set constraint parameters for Formula 4."""
-        self.d_T = d_T  # Constraint (4b): d(w'_j(t), w_g(t)) ≤ d_T
+    def set_constraint_params(self, d_T: float = None, gamma: float = None, 
+                              total_data_size: float = None, benign_data_sizes: dict = None):
+        """
+        Set constraint parameters for Formula 4.
+        
+        Args:
+            d_T: Distance threshold for constraint (4b): d(w'_j(t), w'_g(t)) ≤ d_T
+            gamma: Upper bound for constraint (4c): Σ β'_{i,j}(t) d(w_i(t), w̄_i(t)) ≤ Γ
+            total_data_size: D(t) - Total data size for aggregation weight calculation (Paper Formula (2))
+            benign_data_sizes: Dict {client_id: D_i(t)} - Data sizes for each benign client (Paper Formula (2))
+        """
+        self.d_T = d_T  # Constraint (4b): d(w'_j(t), w'_g(t)) ≤ d_T
         self.gamma = gamma  # Constraint (4c): Σ β'_{i,j}(t) d(w_i(t), w̄_i(t)) ≤ Γ
+        self.total_data_size = total_data_size  # D(t) for weight calculation
+        if benign_data_sizes is not None:
+            self.benign_data_sizes = benign_data_sizes  # {client_id: D_i(t)}
     
     def set_lagrangian_params(self, use_lagrangian_dual: bool = False,
                               lambda_init: float = 0.1,
@@ -1186,14 +1206,11 @@ class AttackerClient(Client):
                             selected_benign: List[torch.Tensor],
                             beta_selection: List[int]) -> torch.Tensor:
         """
-        Compute global loss F(w'_g(t)) according to paper Equation 3.
+        Compute global loss F(w'_g(t)) according to paper Equation (3).
         
-        Paper formulation:
+        Paper Formula (3):
         F(w'_g(t)) = Σ_{i=1}^I (D_i(t)/D(t)) β'_{i,j}(t) F(w_i(t)) 
-                    + (D'(t)/D(t)) F'(w'_j(t))
-        
-        For optimization, we use proxy loss F'(w'_j(t)) which approximates
-        the global loss when w'_g(t) = w_g(t) + w'_j(t).
+                    + (D'_j(t)/D(t)) F'(w'_j(t))
         
         Args:
             malicious_update: w'_j(t) - malicious update
@@ -1207,16 +1224,131 @@ class AttackerClient(Client):
             # Fallback: return zero if proxy not available
             return torch.tensor(0.0, device=self.device, requires_grad=True)
         
-        # Compute proxy loss F'(w'_j(t)) using the proxy loader
-        # This approximates the global loss when the malicious update is aggregated
-        # Use optimization max_batches for consistency (this method may be used in optimization context)
-        proxy_loss = self._proxy_global_loss(malicious_update, max_batches=self.proxy_max_batches_opt, skip_dim_check=False)
+        # Check if we have total_data_size for full formula calculation
+        if self.total_data_size is None or len(self.benign_data_sizes) == 0:
+            # Fallback: use proxy loss only (old behavior)
+            proxy_loss = self._proxy_global_loss(malicious_update, max_batches=self.proxy_max_batches_opt, skip_dim_check=False)
+            return proxy_loss
         
-        # Note: The full formulation would require computing F(w_i(t)) for each benign client,
-        # but for optimization purposes, we use the proxy loss as an approximation.
-        # The proxy loss captures the effect of the malicious update on the global model.
+        # Paper Formula (3): Full calculation with weights
+        total_loss = torch.tensor(0.0, device=self.device, requires_grad=True)
+        D_total = float(self.total_data_size)
+        D_attacker = float(self.claimed_data_size)
         
-        return proxy_loss
+        # First term: Σ_{i=1}^I (D_i(t)/D(t)) β'_{i,j}(t) F(w_i(t))
+        # Note: F(w_i(t)) is approximated by the loss on proxy dataset with benign update w_i(t)
+        # This is computationally expensive, so we approximate by using the average loss
+        if len(selected_benign) > 0 and len(beta_selection) > 0:
+            # Compute average loss over selected benign updates
+            benign_loss_sum = torch.tensor(0.0, device=self.device, requires_grad=True)
+            benign_weight_sum = 0.0
+            
+            for idx, benign_update in enumerate(selected_benign):
+                # Get corresponding original benign client index (if available)
+                # We approximate F(w_i(t)) by computing loss on proxy dataset with benign_update
+                benign_loss = self._proxy_global_loss(benign_update, max_batches=1, skip_dim_check=False)
+                
+                # Get weight: D_i(t)/D(t) (approximate by equal weight if client_id not available)
+                # Try to get actual data size, otherwise use average
+                benign_weight = 1.0 / len(selected_benign)  # Fallback: equal weight
+                # Note: Ideally we should track which benign_update corresponds to which client_id
+                # For now, we use equal weights as approximation
+                
+                benign_loss_sum = benign_loss_sum + benign_weight * benign_loss
+                benign_weight_sum += benign_weight
+            
+            if benign_weight_sum > 0:
+                # Normalize by actual weights (D_i/D_total)
+                # Since we don't have exact mapping, use average as approximation
+                avg_benign_loss = benign_loss_sum / len(selected_benign)
+                # Approximate: Σ (D_i/D_total) * β'_{i,j} * F(w_i) ≈ (Σ D_i * β'_{i,j} / D_total) * avg_benign_loss
+                selected_benign_weight = sum([self.benign_data_sizes.get(i, 1.0) for i in range(len(self.benign_data_sizes))]) / D_total
+                total_loss = total_loss + selected_benign_weight * avg_benign_loss
+        
+        # Second term: (D'_j(t)/D(t)) F'(w'_j(t))
+        attacker_weight = D_attacker / D_total
+        attacker_loss = self._proxy_global_loss(malicious_update, max_batches=self.proxy_max_batches_opt, skip_dim_check=False)
+        total_loss = total_loss + attacker_weight * attacker_loss
+        
+        return total_loss
+    
+    def _compute_real_distance_to_global(self, malicious_update: torch.Tensor,
+                                         selected_benign: List[torch.Tensor],
+                                         beta_selection: List[int]) -> torch.Tensor:
+        """
+        Compute real Euclidean distance d(w'_j(t), w'_g(t)) according to paper Constraint (4b).
+        
+        Paper Formula (2):
+        w'_g(t) = Σ_{i=1}^I (D_i(t)/D(t)) β'_{i,j}(t) w_i(t) + (D'_j(t)/D(t)) w'_j(t)
+        
+        Paper Constraint (4b):
+        d(w'_j(t), w'_g(t)) = ||w'_j(t) - w'_g(t)|| ≤ d_T
+        
+        Args:
+            malicious_update: w'_j(t) - malicious update
+            selected_benign: List of selected benign updates w_i(t) (based on β selection)
+            beta_selection: List of indices indicating which benign updates are selected
+        
+        Returns:
+            Real Euclidean distance ||w'_j(t) - w'_g(t)||
+        """
+        if self.total_data_size is None or self.global_model_params is None:
+            # Fallback: use approximation ||w'_j|| if information not available
+            return torch.norm(malicious_update.view(-1))
+        
+        D_total = float(self.total_data_size)
+        D_attacker = float(self.claimed_data_size)
+        
+        # Ensure malicious_update is on correct device
+        target_device = malicious_update.device if isinstance(malicious_update, torch.Tensor) else self.device
+        malicious_flat = malicious_update.view(-1).to(target_device)
+        
+        # Compute w'_g(t) according to paper Formula (2):
+        # w'_g(t) = Σ_{i=1}^I (D_i(t)/D(t)) β'_{i,j}(t) w_i(t) + (D'_j(t)/D(t)) w'_j(t)
+        # Note: w_i(t) and w'_j(t) are complete model parameters (not updates)
+        # In code, malicious_update is the update: malicious_update = w'_j(t) - w_g(t-1)
+        # So: w'_j(t) = w_g(t-1) + malicious_update
+        
+        # Get global model from previous round: w_g(t-1)
+        w_g_prev = self.global_model_params.view(-1).to(target_device)
+        
+        # Reconstruct complete malicious model: w'_j(t) = w_g(t-1) + malicious_update
+        w_j_malicious = w_g_prev + malicious_flat
+        
+        # Compute w'_g(t) = Σ (D_i/D) * w_i + (D'_j/D) * w'_j
+        # First term: weighted sum of selected benign models w_i(t)
+        # Note: selected_benign are updates, so w_i(t) = w_g_prev + benign_update
+        w_g_weighted_sum = torch.zeros_like(w_g_prev)
+        
+        if len(selected_benign) > 0:
+            # Weight: D_i(t)/D(t) for each selected benign client
+            # Use average weight as approximation if exact mapping not available
+            if len(self.benign_data_sizes) > 0:
+                avg_benign_data_size = sum(self.benign_data_sizes.values()) / len(self.benign_data_sizes)
+                benign_weight = avg_benign_data_size / D_total
+            else:
+                # Fallback: equal weight
+                benign_weight = 1.0 / len(selected_benign) if len(selected_benign) > 0 else 0.0
+            
+            for benign_update in selected_benign:
+                benign_flat = benign_update.view(-1).to(target_device)
+                # Reconstruct complete benign model: w_i(t) = w_g_prev + benign_update
+                w_i_benign = w_g_prev + benign_flat
+                # Add weighted benign model
+                w_g_weighted_sum = w_g_weighted_sum + benign_weight * w_i_benign
+        
+        # Second term: (D'_j(t)/D(t)) w'_j(t)
+        attacker_weight = D_attacker / D_total
+        w_g_weighted_sum = w_g_weighted_sum + attacker_weight * w_j_malicious
+        
+        # w'_g(t) = weighted sum
+        w_g_contaminated = w_g_weighted_sum
+        
+        # Compute distance: ||w'_j(t) - w'_g(t)||
+        # Paper Constraint (4b): d(w'_j, w'_g) = ||w'_j - w'_g||
+        distance = torch.norm(w_j_malicious - w_g_contaminated)
+        
+        return distance
 
     def _gsp_generate_malicious(self, feature_matrix: torch.Tensor, 
                                   adj_orig: torch.Tensor, adj_recon: torch.Tensor,
@@ -1473,7 +1605,6 @@ class AttackerClient(Client):
         else:
             # GSP attack is None: malicious_update remains zeros
             print(f"    [Attacker {self.client_id}] GSP attack is None, using zeros")
-        
         # ============================================================
         # STEP 5: (Removed - attackers don't perform local training)
         # Attackers are data-agnostic and don't have local data for training.
@@ -1571,13 +1702,13 @@ class AttackerClient(Client):
             # Note: Full device check removed from here for performance (checked before loop and every 5 steps)
             
             # ============================================================
-            # Compute base objective function F(w'_g(t))
+            # Compute base objective function F(w'_g(t)) according to paper Formula (3)
             # ============================================================
-            global_loss = self._proxy_global_loss(
-                proxy_param, 
-                max_batches=self.proxy_max_batches_opt, 
-                skip_dim_check=dim_valid,
-                keep_model_on_gpu=True  # Keep model on GPU for backward pass
+            # Use complete global loss formula (3) instead of proxy only
+            global_loss = self._compute_global_loss(
+                proxy_param,
+                selected_benign,
+                beta_selection
             )
             
             # ============================================================
@@ -1603,9 +1734,13 @@ class AttackerClient(Client):
                 
                 # Constraint (4b): d(w'_j(t), w'_g(t)) ≤ d_T
                 # Paper formula eq:wprime_sub: -λ d(w'_j(t), w'_g(t))
-                # Approximation: d(w'_j, w'_g) ≈ ||w'_j|| (when attacker weight is small)
-                # OPTIMIZATION 3: Calculate dist_to_global once for objective function
-                dist_to_global_for_objective = torch.norm(proxy_param.view(-1))
+                # Paper Constraint (4b): d(w'_j, w'_g) = ||w'_j - w'_g||
+                # Use real distance calculation according to paper Formula (2)
+                dist_to_global_for_objective = self._compute_real_distance_to_global(
+                    proxy_param,
+                    selected_benign,
+                    beta_selection
+                )
                 constraint_b_term = -lambda_dt_tensor * dist_to_global_for_objective
                 
                 # Constraint (4c): Σ β'_{i,j}(t) d(w_i(t), w̄_i(t)) ≤ Γ
@@ -1624,12 +1759,13 @@ class AttackerClient(Client):
                 lagrangian_objective = -global_loss + constraint_b_term - constraint_c_term
                 
                 # ============================================================
+                # ============================================================
                 # Compute constraint violations (for updating λ and ρ)
                 # ============================================================
                 constraint_b_violation = F.relu(dist_to_global_for_objective - self.d_T) if self.d_T is not None else torch.tensor(0.0, device=self.device)
             
-                constraint_c_violation = torch.tensor(0.0, device=self.device)
-                if self.gamma is not None and len(selected_benign) > 0:
+            constraint_c_violation = torch.tensor(0.0, device=self.device)
+            if self.gamma is not None and len(selected_benign) > 0:
                     constraint_c_violation = F.relu(torch.tensor(constraint_c_value_for_update, device=self.device) - self.gamma)
                 
             else:
@@ -1638,8 +1774,12 @@ class AttackerClient(Client):
                 lagrangian_objective = -global_loss
                 
                 # Compute constraint violations (for logging only)
-                # OPTIMIZATION 3: Calculate dist_to_global once
-                dist_to_global = torch.norm(proxy_param.view(-1)) if self.d_T is not None else torch.tensor(0.0, device=self.device)
+                # Use real distance calculation according to paper Constraint (4b)
+                dist_to_global = self._compute_real_distance_to_global(
+                    proxy_param,
+                    selected_benign,
+                    beta_selection
+                ) if self.d_T is not None else torch.tensor(0.0, device=self.device)
                 constraint_b_violation = F.relu(dist_to_global - self.d_T) if self.d_T is not None else torch.tensor(0.0, device=self.device)
                 
                 # OPTIMIZATION 6: Constraint (4c) calculation moved to after loop for hard constraint mode
@@ -1691,9 +1831,14 @@ class AttackerClient(Client):
                 # When constraint is violated (constraint value > bound), subgradient > 0, λ increases to penalize violation
                 
                 if self.d_T is not None:
-                    # OPTIMIZATION 3: Calculate dist_to_global after step() (proxy_param has been updated)
-                    # Cannot reuse dist_to_global_for_objective because proxy_param changed after step()
-                    current_dist = torch.norm(proxy_param.view(-1)).item()
+                    # Calculate real distance after step() (proxy_param has been updated)
+                    # Use real distance calculation according to paper Constraint (4b)
+                    current_dist_tensor = self._compute_real_distance_to_global(
+                        proxy_param,
+                        selected_benign,
+                        beta_selection
+                    )
+                    current_dist = current_dist_tensor.item()
                     lambda_val = self.lambda_dt.item() if isinstance(self.lambda_dt, torch.Tensor) else self.lambda_dt
                     # Subgradient: d(w'_j, w'_g) - d_T
                     # If constraint is violated (d(...) > d_T), subgradient > 0, λ increases
@@ -1727,10 +1872,13 @@ class AttackerClient(Client):
                 # Modification 4: Constraint safeguard under Lagrangian mechanism
                 # Check within optimization loop, if violation exceeds 20%, immediately apply light projection to prevent path deviation
                 # This maintains Lagrangian flexibility while ensuring constraints are promptly safeguarded
-                # OPTIMIZATION 3: Reuse current_dist calculated above for λ update if available
-                # Note: current_dist was calculated after step() in the λ update section, so it's the updated value
-                # We calculate it here again to ensure we have the value (avoiding scope issues)
-                dist_to_global_for_projection = torch.norm(proxy_param.view(-1)).item()
+                # Use real distance calculation according to paper Constraint (4b)
+                dist_to_global_for_projection_tensor = self._compute_real_distance_to_global(
+                    proxy_param,
+                    selected_benign,
+                    beta_selection
+                )
+                dist_to_global_for_projection = dist_to_global_for_projection_tensor.item()
                 
                 violation_ratio = (dist_to_global_for_projection - self.d_T) / self.d_T if self.d_T > 0 else 0.0
                 
@@ -1757,10 +1905,16 @@ class AttackerClient(Client):
         # STEP 8: Final constraint check (根据是否使用Lagrangian)
         # ============================================================
         if self.use_lagrangian_dual:
-            # 修改8: 改进最终约束检查 - 分级投影策略（Lagrangian框架内）
-            # 根据违反程度采用不同策略，平衡灵活性和约束满足性
+            # Final constraint check: Graded projection strategy (within Lagrangian framework)
+            # Use different strategies based on violation degree to balance flexibility and constraint satisfaction
             if self.d_T is not None:
-                dist_to_global = torch.norm(malicious_update).item()
+                # Use real distance calculation according to paper Constraint (4b)
+                dist_to_global_tensor = self._compute_real_distance_to_global(
+                    malicious_update,
+                    selected_benign,
+                    beta_selection
+                )
+                dist_to_global = dist_to_global_tensor.item()
                 constraint_violation = max(0, dist_to_global - self.d_T)
                 violation_ratio = constraint_violation / self.d_T if self.d_T > 0 else 0.0
                 
@@ -1788,18 +1942,21 @@ class AttackerClient(Client):
         else:
             # Hard constraint projection mechanism (original logic)
             if self.d_T is not None:
-                # Compute distance from global model
-                # Approximation: d(w'_j, w'_g) ≈ ||w'_j - w_g||
-                # This is exact when attacker weight is small
-                dist_to_global = torch.norm(malicious_update).item()
-                
-                if dist_to_global > self.d_T:
-                    # Hard constraint: project to satisfy d ≤ d_T
-                    scale_factor = self.d_T / dist_to_global
-                    malicious_update = malicious_update * scale_factor
-                    final_norm = torch.norm(malicious_update).item()
-                    print(f"    [Attacker {self.client_id}] Applied hard constraint projection: "
-                          f"scaled from {dist_to_global:.4f} to {final_norm:.4f}")
+                # Use real distance calculation according to paper Constraint (4b)
+                dist_to_global_tensor = self._compute_real_distance_to_global(
+                    malicious_update,
+                    selected_benign,
+                    beta_selection
+                )
+                dist_to_global = dist_to_global_tensor.item()
+            
+            if dist_to_global > self.d_T:
+                # Hard constraint: project to satisfy d ≤ d_T
+                scale_factor = self.d_T / dist_to_global
+                malicious_update = malicious_update * scale_factor
+                final_norm = torch.norm(malicious_update).item()
+                print(f"    [Attacker {self.client_id}] Applied hard constraint projection: "
+                      f"scaled from {dist_to_global:.4f} to {final_norm:.4f}")
         
         # Compute final attack objective value for logging
         # Use evaluation max_batches for more accurate final assessment
