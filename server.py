@@ -195,7 +195,7 @@ class Server:
         self._current_client_ids = client_ids
         self._sorted_client_ids = client_ids
         
-        # If defense is disabled, always use standard FedAvg (no defense mechanism)
+        # If defense is disabled, use standard FedAvg but still compute metrics for visualization
         if not self.enable_defense:
             # Standard FedAvg aggregation (defense mechanism disabled)
             weights = []
@@ -223,17 +223,19 @@ class Server:
             print(f"  🔧 Server Learning Rate: {self.server_lr}")
             print(f"  📐 Aggregated update norm: {aggregated_update_norm:.6f}")
             
-            # Return defense log with all clients accepted (for compatibility)
-            similarities = torch.ones(len(updates), device=self.device).cpu().numpy()
+            # Compute similarity and distance metrics for visualization (even though defense is disabled)
+            # This allows observing attack impact through metrics
+            similarities = self._compute_similarities(updates)
             euclidean_distances = self._compute_euclidean_distances(updates) if len(updates) > 0 else np.array([])
+            
             defense_log = {
                 'similarities': similarities.tolist(),
                 'euclidean_distances': euclidean_distances.tolist() if len(euclidean_distances) > 0 else [],
-                'accepted_clients': client_ids.copy(),
+                'accepted_clients': client_ids.copy(),  # All clients accepted when defense is disabled
                 'rejected_clients': [],
                 'threshold': 0.0,
-                'mean_similarity': 1.0,
-                'std_similarity': 0.0,
+                'mean_similarity': similarities.mean().item() if len(similarities) > 0 else 1.0,
+                'std_similarity': similarities.std().item() if len(similarities) > 0 else 0.0,
                 'mean_euclidean_distance': euclidean_distances.mean().item() if len(euclidean_distances) > 0 else 0.0,
                 'std_euclidean_distance': euclidean_distances.std().item() if len(euclidean_distances) > 0 else 0.0,
                 'tolerance_factor': self.tolerance_factor,
@@ -274,8 +276,9 @@ class Server:
             print(f"  🔧 Server Learning Rate: {self.server_lr}")
             print(f"  📐 Aggregated update norm: {aggregated_update_norm:.6f}")
             
-            # Return defense log with all clients accepted (for compatibility)
-            similarities = torch.ones(len(updates), device=self.device).cpu().numpy()
+            # Compute similarity and distance metrics for visualization (even when no attackers)
+            # This provides baseline metrics for comparison
+            similarities = self._compute_similarities(updates)
             euclidean_distances = self._compute_euclidean_distances(updates) if len(updates) > 0 else np.array([])
             defense_log = {
                 'similarities': similarities.tolist(),
@@ -283,8 +286,8 @@ class Server:
                 'accepted_clients': client_ids.copy(),
                 'rejected_clients': [],
                 'threshold': 0.0,
-                'mean_similarity': 1.0,
-                'std_similarity': 0.0,
+                'mean_similarity': similarities.mean().item() if len(similarities) > 0 else 1.0,
+                'std_similarity': similarities.std().item() if len(similarities) > 0 else 0.0,
                 'mean_euclidean_distance': euclidean_distances.mean().item() if len(euclidean_distances) > 0 else 0.0,
                 'std_euclidean_distance': euclidean_distances.std().item() if len(euclidean_distances) > 0 else 0.0,
                 'tolerance_factor': self.tolerance_factor,
