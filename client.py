@@ -292,6 +292,9 @@ class AttackerClient(Client):
         self.lambda_init_value = None  # Save initial λ value for reset in prepare_for_round
         self.rho_init_value = None     # Save initial ρ value for reset in prepare_for_round
         
+        # Track violation history for adaptive λ initialization (Optimization)
+        self.last_violation = None  # Last round's constraint violation value (distance, not violation amount)
+        
         # Get model parameter count (works on CPU model)
         self._flat_numel = int(self.model.get_flat_params().numel())  # Convert to Python int
         
@@ -327,10 +330,26 @@ class AttackerClient(Client):
         # Data-agnostic attacker keeps an empty loader
         self.data_loader = self.data_manager.get_empty_loader()
         
-        # Modification 1: Reset Lagrangian multipliers to initial values (restart optimization each round)
+        # Modification 1: Reset Lagrangian multipliers (with adaptive initialization based on history)
         # Reason: Prevent λ and ρ from accumulating across rounds, which causes numerical instability and optimization imbalance
+        # Optimization: Use adaptive λ initialization based on previous round's violation to provide better starting point
         if self.use_lagrangian_dual and self.lambda_init_value is not None and self.rho_init_value is not None:
-            self.lambda_dt = torch.tensor(self.lambda_init_value, requires_grad=False)
+            # Adaptive λ initialization: if last round had large violation, use larger initial λ
+            if self.last_violation is not None and self.d_T is not None and self.last_violation > self.d_T * 1.5:
+                # Estimate required λ based on violation magnitude and optimization steps
+                # Target: λ should be large enough to suppress violation in proxy_steps iterations
+                # Rough estimate: λ_needed ≈ violation / (lambda_lr * proxy_steps)
+                estimated_lambda = self.last_violation / (self.lambda_lr * self.proxy_steps)
+                # Use conservative estimate (50% of calculated value) to avoid over-penalization
+                adaptive_lambda_init = max(self.lambda_init_value, estimated_lambda * 0.5)
+                # Cap at reasonable maximum (10× initial value) to prevent excessive values
+                adaptive_lambda_init = min(adaptive_lambda_init, self.lambda_init_value * 10.0)
+                self.lambda_dt = torch.tensor(adaptive_lambda_init, requires_grad=False)
+                if adaptive_lambda_init > self.lambda_init_value * 1.5:
+                    print(f"    [Attacker {self.client_id}] Adaptive λ init: {adaptive_lambda_init:.4f} "
+                          f"(based on last violation: {self.last_violation:.4f})")
+            else:
+                self.lambda_dt = torch.tensor(self.lambda_init_value, requires_grad=False)
             self.rho_dt = torch.tensor(self.rho_init_value, requires_grad=False)
 
     def receive_benign_updates(self, updates: List[torch.Tensor]):
@@ -1605,6 +1624,65 @@ class AttackerClient(Client):
         else:
             # GSP attack is None: malicious_update remains zeros
             print(f"    [Attacker {self.client_id}] GSP attack is None, using zeros")
+        
+        # ============================================================
+        # OPTIMIZATION: Pre-projection after GSP generation
+        # Immediately check and reduce violation if GSP-generated update is too large
+        # This provides a reasonable starting point for Lagrangian optimization
+        # ============================================================
+        if self.use_lagrangian_dual and self.d_T is not None and torch.norm(malicious_update).item() > 0:
+            # Get beta selection for distance calculation (if available, otherwise use empty)
+            beta_selection = self._get_selected_benign_indices()
+            selected_benign = self._select_benign_subset() if hasattr(self, 'benign_updates') and self.benign_updates else []
+            
+            # Check initial violation after GSP generation
+            try:
+                initial_dist_tensor = self._compute_real_distance_to_global(
+                    malicious_update,
+                    selected_benign,
+                    beta_selection
+                )
+                initial_dist = initial_dist_tensor.item()
+                
+                # Multi-level pre-projection based on violation severity
+                # This provides a reasonable starting point for Lagrangian optimization
+                # while preserving more attack capability compared to aggressive single-level projection
+                if initial_dist > self.d_T * 50:  # Extreme violation (>5000%)
+                    # Extreme case: project to 3×d_T to preserve more attack capability
+                    target_dist = self.d_T * 3.0
+                    scale_factor = target_dist / initial_dist
+                    malicious_update = malicious_update * scale_factor
+                    pre_projection_violation_ratio = ((initial_dist - self.d_T) / self.d_T * 100) if self.d_T > 0 else 0.0
+                    print(f"    [Attacker {self.client_id}] Pre-projection (extreme): scaled from {initial_dist:.4f} to {target_dist:.4f} "
+                          f"(initial violation: {pre_projection_violation_ratio:.1f}%)")
+                elif initial_dist > self.d_T * 10:  # Severe violation (>1000%)
+                    # Severe case: project to 2×d_T
+                    target_dist = self.d_T * 2.0
+                    scale_factor = target_dist / initial_dist
+                    malicious_update = malicious_update * scale_factor
+                    pre_projection_violation_ratio = ((initial_dist - self.d_T) / self.d_T * 100) if self.d_T > 0 else 0.0
+                    print(f"    [Attacker {self.client_id}] Pre-projection (severe): scaled from {initial_dist:.4f} to {target_dist:.4f} "
+                          f"(initial violation: {pre_projection_violation_ratio:.1f}%)")
+                elif initial_dist > self.d_T * 3:  # Moderate violation (>200%)
+                    # Moderate case: project to 1.5×d_T
+                    target_dist = self.d_T * 1.5
+                    scale_factor = target_dist / initial_dist
+                    malicious_update = malicious_update * scale_factor
+                    pre_projection_violation_ratio = ((initial_dist - self.d_T) / self.d_T * 100) if self.d_T > 0 else 0.0
+                    print(f"    [Attacker {self.client_id}] Pre-projection (moderate): scaled from {initial_dist:.4f} to {target_dist:.4f} "
+                          f"(initial violation: {pre_projection_violation_ratio:.1f}%)")
+                elif initial_dist > self.d_T * 1.5:  # Mild violation (>50%)
+                    # Mild case: project to 1.2×d_T (original logic)
+                    target_dist = self.d_T * 1.2
+                    scale_factor = target_dist / initial_dist
+                    malicious_update = malicious_update * scale_factor
+                    pre_projection_violation_ratio = ((initial_dist - self.d_T) / self.d_T * 100) if self.d_T > 0 else 0.0
+                    print(f"    [Attacker {self.client_id}] Pre-projection (mild): scaled from {initial_dist:.4f} to {target_dist:.4f} "
+                          f"(initial violation: {pre_projection_violation_ratio:.1f}%)")
+            except Exception as e:
+                # If distance calculation fails (e.g., insufficient data), skip pre-projection
+                # This can happen in early rounds when data_info is not yet available
+                pass
         # ============================================================
         # STEP 5: (Removed - attackers don't perform local training)
         # Attackers are data-agnostic and don't have local data for training.
@@ -1917,6 +1995,9 @@ class AttackerClient(Client):
                 dist_to_global = dist_to_global_tensor.item()
                 constraint_violation = max(0, dist_to_global - self.d_T)
                 violation_ratio = constraint_violation / self.d_T if self.d_T > 0 else 0.0
+                
+                # Store violation for adaptive initialization in next round (Optimization)
+                self.last_violation = dist_to_global
                 
                 if constraint_violation > 0:
                     lambda_val = self.lambda_dt.item() if isinstance(self.lambda_dt, torch.Tensor) else self.lambda_dt
