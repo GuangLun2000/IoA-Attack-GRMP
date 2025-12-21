@@ -1980,7 +1980,7 @@ class AttackerClient(Client):
         torch.cuda.empty_cache()
         
         # ============================================================
-        # STEP 8: Final constraint check (根据是否使用Lagrangian)
+        # STEP 8: Final constraint check (depending on whether Lagrangian is used)
         # ============================================================
         if self.use_lagrangian_dual:
             # Final constraint check: Graded projection strategy (within Lagrangian framework)
@@ -2004,22 +2004,25 @@ class AttackerClient(Client):
                     print(f"    [Attacker {self.client_id}] Constraint(4b) violation: {constraint_violation:.6f} "
                           f"(λ={lambda_val:.4f}, violation={violation_ratio*100:.1f}%)")
                     
-                    # 分级投影策略：
-                    if violation_ratio > 0.30:  # 严重违反（>30%）
-                        # 严格投影到 d_T，完全满足约束
+                    # Graded projection strategy (improved to allow Lagrangian mechanism to work):
+                    # Increased threshold from 30% to 100% to reduce frequent strict projection
+                    # This allows Lagrangian multipliers (λ) to effectively control violations
+                    if violation_ratio > 1.00:  # Severe violation (>100%)
+                        # Strict projection to d_T, completely satisfy constraint
+                        # Only applied when violation is extremely severe to preserve optimization stability
                         scale_factor = self.d_T / dist_to_global
                         malicious_update = malicious_update * scale_factor
-                        print(f"      Applied strict projection (violation >30%): scaled to d_T")
-                    elif violation_ratio > 0.15:  # 中度违反（15-30%）
-                        # 轻微投影到 1.05×d_T，允许5%余量，保持一定灵活性
-                        target_dist = self.d_T * 1.05
+                        print(f"      Applied strict projection (violation >100%): scaled to d_T")
+                    elif violation_ratio > 0.50:  # Moderate violation (50-100%)
+                        # Mild projection to 1.1×d_T, allowing 10% margin for Lagrangian flexibility
+                        target_dist = self.d_T * 1.1
                         scale_factor = target_dist / dist_to_global
                         malicious_update = malicious_update * scale_factor
-                        print(f"      Applied mild projection (violation 15-30%): scaled to 1.05×d_T")
-                    else:  # 轻微违反（<15%）
-                        # 允许轻微违反，利用Lagrangian机制的灵活性
-                        # 不进行投影，由乘数来控制
-                        print(f"      Allowed minor violation (violation <15%): kept as is")
+                        print(f"      Applied mild projection (violation 50-100%): scaled to 1.1×d_T")
+                    else:  # Minor violation (<50%)
+                        # Allow minor violation, leverage Lagrangian mechanism flexibility
+                        # No projection, controlled by multipliers (λ, ρ)
+                        print(f"      Allowed minor violation (violation <50%): kept as is, controlled by Lagrangian multipliers")
         else:
             # Hard constraint projection mechanism (original logic)
             if self.d_T is not None:
@@ -2067,7 +2070,7 @@ class AttackerClient(Client):
                   f"||w'_j||={malicious_norm:.4f}, " \
                   f"constraint_c={constraint_c_value.item():.4f}"
         
-        # 如果使用Lagrangian机制，显示乘数值
+        # If using the Lagrangian mechanism, display the multiplier value
         if self.use_lagrangian_dual and self.lambda_dt is not None and self.rho_dt is not None:
             lambda_val = self.lambda_dt.item() if isinstance(self.lambda_dt, torch.Tensor) else self.lambda_dt
             rho_val = self.rho_dt.item() if isinstance(self.rho_dt, torch.Tensor) else self.rho_dt
