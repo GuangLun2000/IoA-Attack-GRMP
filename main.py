@@ -662,8 +662,6 @@ def main():
         
         # ========== Formula 4 Constraint Parameters ==========
         'd_T': 1.0,  # Distance threshold for constraint (4b): d(w'_j(t), w'_g(t)) ≤ d_T
-                     # Increased from 0.6 to 1.0 to reduce excessive projection and preserve attack capability
-                     # This allows updates with magnitude closer to benign clients, improving similarity
         'gamma': 5.0,  # Upper bound for constraint (4c): Σ β'_{i,j}(t) d(w_i(t), w̄_i(t)) ≤ Γ
         
         # ========== VGAE Training Parameters ==========
