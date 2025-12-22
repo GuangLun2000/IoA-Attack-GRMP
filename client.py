@@ -774,7 +774,7 @@ class AttackerClient(Client):
             
             # Skip dimension check if already validated (performance optimization)
             param_dict = self._flat_to_param_dict(candidate_params, skip_dim_check=skip_dim_check)
-            
+
             # CRITICAL FIX: Ensure all parameters in param_dict are on the correct device
             # Normalize device: always use 'cuda:0' for consistency  
             # Note: target_device already defined earlier, but redefining here for clarity
@@ -801,7 +801,7 @@ class AttackerClient(Client):
             
             # Normalize device once for this batch loop
             target_device = torch.device('cuda:0') if self.device.type == 'cuda' else self.device
-            
+
             for batch in self.proxy_loader:
                 input_ids = batch['input_ids'].to(target_device)
                 attention_mask = batch['attention_mask'].to(target_device)
@@ -906,7 +906,7 @@ class AttackerClient(Client):
                         # Final verification before calling stateless.functional_call
                         self._ensure_model_on_device(self.model, target_device)
                         self.model.to(target_device)
-                        
+
                         logits = stateless.functional_call(
                             self.model,
                             param_dict,
@@ -1033,13 +1033,13 @@ class AttackerClient(Client):
                                         param.data.copy_(restored_value)
                             # Return zero loss as last resort
                             return torch.tensor(0.0, device=target_device)
-                
+
                 ce_loss = F.cross_entropy(logits, labels)
                 total_loss = total_loss + ce_loss
                 batches += 1
                 if batches >= max_batches:
                     break
-            
+
             if batches == 0:
                 result = torch.tensor(0.0, device=self.device)
             else:
@@ -1137,10 +1137,29 @@ class AttackerClient(Client):
         # Paper: input_dim = I (number of clients/benign models)
         vgae_input_dim = int(self.vgae.gc1.weight.shape[0]) if self.vgae is not None else None
         if self.vgae is None or vgae_input_dim != input_dim:
+            # Use client_id-based seed for VGAE initialization to ensure diversity among attackers
+            # This ensures different attackers have different VGAE initial weights, leading to different attack patterns
+            import hashlib
+            seed_str = f"vgae_{self.client_id}_{input_dim}_{self.vgae_hidden_dim}_{self.vgae_latent_dim}"
+            vgae_seed = int(hashlib.md5(seed_str.encode()).hexdigest()[:8], 16) % (2**31)
+            
+            # Save current random state
+            rng_state_before = torch.get_rng_state()
+            np_rng_state_before = np.random.get_state()
+            
+            # Set seed for VGAE initialization
+            torch.manual_seed(vgae_seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed(vgae_seed)
+            
             # Use configured VGAE architecture parameters (per paper: hidden1_dim=32, hidden2_dim=16)
             self.vgae = VGAE(input_dim=input_dim, hidden_dim=self.vgae_hidden_dim, 
                             latent_dim=self.vgae_latent_dim, dropout=self.vgae_dropout).to(self.device)
             self.vgae_optimizer = optim.Adam(self.vgae.parameters(), lr=self.vgae_lr)
+            
+            # Restore random state to avoid affecting other random number generation
+            torch.set_rng_state(rng_state_before)
+            np.random.set_state(np_rng_state_before)
 
         self.vgae.train()
         
@@ -1465,12 +1484,32 @@ class AttackerClient(Client):
         select_idx = int(self.client_id % F_recon_rows)  # Ensure Python int
         gsp_attack = F_recon[select_idx].clone()  # Select one row from F̂ as w'_j(t), clone to avoid view issues
         
-        # If F_recon has only one row, add small client-specific perturbation to ensure diversity
-        # This prevents multiple attackers from generating identical attacks
-        if F_recon_rows == 1:
-            perturbation_scale = self.gsp_perturbation_scale * (self.client_id + 1)  # Scale based on client_id
-            perturbation = torch.randn_like(gsp_attack) * perturbation_scale
-            gsp_attack = gsp_attack + perturbation
+        # Add client-specific perturbation to ensure diversity among attackers
+        # This is important because:
+        # 1. If F_recon has only one row, all attackers select the same row, so perturbation is essential
+        # 2. If F_recon has multiple rows, different attackers may select different rows, but the rows
+        #    may still be similar due to similar VGAE training. Perturbation adds additional diversity.
+        # Use deterministic random number generation based on client_id and select_idx for reproducibility
+        import hashlib
+        pert_seed_str = f"gsp_pert_{self.client_id}_{select_idx}_{F_recon_rows}"
+        pert_seed = int(hashlib.md5(pert_seed_str.encode()).hexdigest()[:8], 16) % (2**31)
+        
+        # Save current random state
+        rng_state_before = torch.get_rng_state()
+        
+        # Set seed for perturbation generation
+        torch.manual_seed(pert_seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(pert_seed)
+        
+        # Generate perturbation with client_id and select_idx dependent scale
+        # Scale increases with client_id and select_idx to ensure different perturbations
+        perturbation_scale = self.gsp_perturbation_scale * (self.client_id + 1) * (1.0 + 0.1 * select_idx)
+        perturbation = torch.randn_like(gsp_attack) * perturbation_scale
+        gsp_attack = gsp_attack + perturbation
+        
+        # Restore random state
+        torch.set_rng_state(rng_state_before)
         
         # Ensure gsp_attack is 1D tensor (not scalar)
         gsp_dim_count = int(gsp_attack.dim())  # Convert to Python int
