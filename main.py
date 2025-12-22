@@ -671,7 +671,7 @@ def main():
             # - LoRA (r=16): ~0.5-1M parameters, dim_reduction_size will be auto-adjusted if > LoRA params
             # Auto-adjustment: If dim_reduction_size > actual LoRA params, it will be set to 80% of LoRA params
         'dim_reduction_size': 10000,  # Reduced dimensionality of LLM parameters (auto-adjusted for LoRA if needed)
-        'vgae_epochs': 20,  # Number of epochs for VGAE training (reference: 10)
+        'vgae_epochs': 10,  # Number of epochs for VGAE training (reference: 10)
         'vgae_lr': 0.01,  # Learning rate for VGAE optimizer (reference: 0.01)
         'vgae_hidden_dim': 32,  # VGAE hidden layer dimension (per paper: hidden1_dim=32)
         'vgae_latent_dim': 16,  # VGAE latent space dimension (per paper: hidden2_dim=16)
@@ -679,7 +679,7 @@ def main():
         
         # ========== Attack Optimization Parameters ==========
         'proxy_step': 0.1,  # Step size for gradient-free ascent toward global-loss proxy
-        'proxy_steps': 20,  # Number of optimization steps for attack objective (int)
+        'proxy_steps': 30,  # Number of optimization steps for attack objective (int)
         'gsp_perturbation_scale': 0.01,  # Perturbation scale for GSP attack diversity (float)
         'opt_init_perturbation_scale': 0.01,  # Perturbation scale for optimization initialization (float)
         'grad_clip_norm': 1.0,  # Gradient clipping norm for training stability (float)
@@ -690,8 +690,8 @@ def main():
                                       # If True, uses Lagrangian penalty terms (per paper eq:lagrangian and eq:wprime_sub)
         'lambda_init': 0.1,  # Initial λ(t) value (λ(1)≥0, per paper Algorithm 1)
         'rho_init': 0.1,     # Initial ρ(t) value (ρ(1)≥0, per paper Algorithm 1)
-        'lambda_lr': 0.02,  # Learning rate for λ(t) update (subgradient step size)
-        'rho_lr': 0.005,      # Learning rate for ρ(t) update (subgradient step size)
+        'lambda_lr': 0.1,  # Learning rate for λ(t) update (subgradient step size)
+        'rho_lr': 0.01,   # Learning rate for ρ(t) update (subgradient step size)
         # 'attacker_claimed_data_size': None,  # If None, uses actual assigned data size (recommended for realistic scenario)
         # If set to a value, overrides actual data size (for attack experiments where attacker claims more data)
         'attacker_claimed_data_size': None,  # None = use actual assigned data size (recommended)
