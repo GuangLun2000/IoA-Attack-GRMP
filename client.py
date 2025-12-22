@@ -1714,63 +1714,11 @@ class AttackerClient(Client):
             print(f"    [Attacker {self.client_id}] GSP attack is None, using zeros")
         
         # ============================================================
-        # OPTIMIZATION: Pre-projection after GSP generation
-        # Immediately check and reduce violation if GSP-generated update is too large
-        # This provides a reasonable starting point for Lagrangian optimization
+        # Pre-projection removed: Let Lagrangian mechanism handle constraint control directly
+        # Reason: Pre-projection effect was negated by optimization process (distance grew back to similar values)
+        # If Lagrangian mechanism is effective, it should handle initial distance directly
+        # If Lagrangian mechanism is ineffective, pre-projection also doesn't help
         # ============================================================
-        if self.use_lagrangian_dual and self.d_T is not None and torch.norm(malicious_update).item() > 0:
-            # Get beta selection for distance calculation (if available, otherwise use empty)
-            beta_selection = self._get_selected_benign_indices()
-            selected_benign = self._select_benign_subset() if hasattr(self, 'benign_updates') and self.benign_updates else []
-            
-            # Check initial violation after GSP generation
-            try:
-                initial_dist_tensor = self._compute_real_distance_to_global(
-                    malicious_update,
-                    selected_benign,
-                    beta_selection
-                )
-                initial_dist = initial_dist_tensor.item()
-                
-                # Multi-level pre-projection based on violation severity
-                # This provides a reasonable starting point for Lagrangian optimization
-                # while preserving more attack capability compared to aggressive single-level projection
-                if initial_dist > self.d_T * 50:  # Extreme violation (>5000%)
-                    # Extreme case: project to 3×d_T to preserve more attack capability
-                    target_dist = self.d_T * 3.0
-                    scale_factor = target_dist / initial_dist
-                    malicious_update = malicious_update * scale_factor
-                    pre_projection_violation_ratio = ((initial_dist - self.d_T) / self.d_T * 100) if self.d_T > 0 else 0.0
-                    print(f"    [Attacker {self.client_id}] Pre-projection (extreme): scaled from {initial_dist:.4f} to {target_dist:.4f} "
-                          f"(initial violation: {pre_projection_violation_ratio:.1f}%)")
-                elif initial_dist > self.d_T * 10:  # Severe violation (>1000%)
-                    # Severe case: project to 2×d_T
-                    target_dist = self.d_T * 2.0
-                    scale_factor = target_dist / initial_dist
-                    malicious_update = malicious_update * scale_factor
-                    pre_projection_violation_ratio = ((initial_dist - self.d_T) / self.d_T * 100) if self.d_T > 0 else 0.0
-                    print(f"    [Attacker {self.client_id}] Pre-projection (severe): scaled from {initial_dist:.4f} to {target_dist:.4f} "
-                          f"(initial violation: {pre_projection_violation_ratio:.1f}%)")
-                elif initial_dist > self.d_T * 3:  # Moderate violation (>200%)
-                    # Moderate case: project to 1.5×d_T
-                    target_dist = self.d_T * 1.5
-                    scale_factor = target_dist / initial_dist
-                    malicious_update = malicious_update * scale_factor
-                    pre_projection_violation_ratio = ((initial_dist - self.d_T) / self.d_T * 100) if self.d_T > 0 else 0.0
-                    print(f"    [Attacker {self.client_id}] Pre-projection (moderate): scaled from {initial_dist:.4f} to {target_dist:.4f} "
-                          f"(initial violation: {pre_projection_violation_ratio:.1f}%)")
-                elif initial_dist > self.d_T * 1.5:  # Mild violation (>50%)
-                    # Mild case: project to 1.2×d_T (original logic)
-                    target_dist = self.d_T * 1.2
-                    scale_factor = target_dist / initial_dist
-                    malicious_update = malicious_update * scale_factor
-                    pre_projection_violation_ratio = ((initial_dist - self.d_T) / self.d_T * 100) if self.d_T > 0 else 0.0
-                    print(f"    [Attacker {self.client_id}] Pre-projection (mild): scaled from {initial_dist:.4f} to {target_dist:.4f} "
-                          f"(initial violation: {pre_projection_violation_ratio:.1f}%)")
-            except Exception as e:
-                # If distance calculation fails (e.g., insufficient data), skip pre-projection
-                # This can happen in early rounds when data_info is not yet available
-                pass
         # ============================================================
         # STEP 5: (Removed - attackers don't perform local training)
         # Attackers are data-agnostic and don't have local data for training.
