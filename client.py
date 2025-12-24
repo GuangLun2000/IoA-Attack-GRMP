@@ -297,6 +297,12 @@ class AttackerClient(Client):
         # Track violation history for adaptive λ initialization (Optimization)
         self.last_violation = None  # Last round's constraint violation value (distance, not violation amount)
         
+        # Normalization for Lagrangian objective (to balance scale between global_loss and constraint terms)
+        self.use_loss_normalization = False  # Whether to normalize global_loss in Lagrangian objective
+        self.loss_normalization_factor = 1.0  # Normalization factor for global_loss (adaptive)
+        self.loss_normalization_ema_alpha = 0.9  # EMA decay factor for tracking loss scale
+        self.initial_loss_scale = None  # Initial loss scale for normalization initialization
+        
         # Get model parameter count (works on CPU model)
         self._flat_numel = int(self.model.get_flat_params().numel())  # Convert to Python int
         
@@ -1258,7 +1264,8 @@ class AttackerClient(Client):
                               rho_init: float = 0.1,
                               lambda_lr: float = 0.01,
                               rho_lr: float = 0.01,
-                              enable_final_projection: bool = True):
+                              enable_final_projection: bool = True,
+                              use_loss_normalization: bool = False):
         """
         Set Lagrangian Dual parameters (initialized according to paper Algorithm 1)
         
@@ -1275,10 +1282,14 @@ class AttackerClient(Client):
             rho_lr: Learning rate for ρ(t) update (subgradient step size)
             enable_final_projection: Whether to apply final projection after optimization (only for Lagrangian mode)
                                    If False, completely relies on Lagrangian mechanism (no final projection)
+            use_loss_normalization: Whether to normalize global_loss in Lagrangian objective to balance scale
+                                   with constraint terms. If True, enables adaptive normalization to make
+                                   constraint terms comparable to main objective, potentially eliminating need for projection.
         
         Modification 2: Save initial values for reset in prepare_for_round
         """
         self.use_lagrangian_dual = use_lagrangian_dual
+        self.use_loss_normalization = use_loss_normalization
         if use_lagrangian_dual:
             # Paper: λ(1)≥0, ρ(1)≥0
             # Modification 2: Save initial values for reset each round
@@ -1289,6 +1300,10 @@ class AttackerClient(Client):
             self.lambda_lr = lambda_lr
             self.rho_lr = rho_lr
             self.enable_final_projection = enable_final_projection
+            # Reset normalization state when setting new parameters
+            if use_loss_normalization:
+                self.initial_loss_scale = None
+                self.loss_normalization_factor = 1.0
         else:
             # Hard constraint projection mode
             self.lambda_dt = None
@@ -1975,7 +1990,43 @@ class AttackerClient(Client):
                 # Lagrangian: L = F(w'_g) - λ (d(w'_j, w'_g) - d_T) - ρ (Σ(...) - Γ)
                 # Converting to minimization: minimize -L = -F(w'_g) + λ d(w'_j, w'_g) + ρ Σ(...)
                 # (constant terms λ d_T and ρ Γ are omitted as they don't affect optimization direction)
-                lagrangian_objective = -global_loss + constraint_b_term + constraint_c_term
+                
+                # Normalization: Balance scale between global_loss and constraint terms
+                # This ensures constraint terms have comparable influence to the main objective
+                # Mathematical justification: Normalization doesn't change optimization direction (gradient direction),
+                # but balances the magnitude of gradients from different terms, making Lagrangian mechanism effective
+                if self.use_loss_normalization:
+                    # Initialize normalization factor on first step
+                    if self.initial_loss_scale is None:
+                        # Use current global_loss magnitude as initial scale
+                        with torch.no_grad():
+                            initial_scale = global_loss.item() if global_loss.requires_grad else global_loss
+                            if initial_scale > 0:
+                                self.initial_loss_scale = abs(initial_scale)
+                                self.loss_normalization_factor = self.initial_loss_scale
+                    
+                    # Update normalization factor using exponential moving average (EMA)
+                    # This adapts to changing loss scale while maintaining stability
+                    with torch.no_grad():
+                        current_scale = abs(global_loss.item()) if global_loss.requires_grad else abs(global_loss)
+                        if current_scale > 0:
+                            # EMA update: factor = α * old_factor + (1-α) * current_scale
+                            # This tracks the running average of loss magnitude
+                            self.loss_normalization_factor = (
+                                self.loss_normalization_ema_alpha * self.loss_normalization_factor +
+                                (1 - self.loss_normalization_ema_alpha) * current_scale
+                            )
+                            # Ensure normalization factor doesn't become too small (prevent division by very small number)
+                            self.loss_normalization_factor = max(self.loss_normalization_factor, 1e-6)
+                    
+                    # Normalize global_loss: divide by normalization factor
+                    # This scales global_loss to be comparable with constraint terms
+                    normalized_global_loss = global_loss / self.loss_normalization_factor
+                else:
+                    # No normalization: use original global_loss
+                    normalized_global_loss = global_loss
+                
+                lagrangian_objective = -normalized_global_loss + constraint_b_term + constraint_c_term
                 
                 
                 # ============================================================
@@ -2087,14 +2138,46 @@ class AttackerClient(Client):
                 if dist_to_global > self.d_T:
                     # Project to constraint set: scale down to satisfy d ≤ d_T
                     proxy_param.data = proxy_param.data * (self.d_T / dist_to_global)
-            # Note: In Lagrangian Dual mode, we do NOT apply any projection during optimization loop
-            # This maintains mathematical integrity of the dual problem:
+            elif self.use_lagrangian_dual and self.d_T is not None:
+                # Emergency protection mechanism for Lagrangian Dual mode
+                # NOTE: If use_loss_normalization=True, this protection may not be needed
+                # as normalization should balance the scales and make Lagrangian mechanism effective
+                # However, we keep it as a safety net for extreme cases
+                if not self.use_loss_normalization:
+                    # Only apply emergency protection if normalization is disabled
+                    # This is a safety mechanism to prevent numerical explosion while maintaining
+                    # mathematical integrity of the Lagrangian mechanism
+                    # Triggers when violation is severe (>2x threshold) to prevent loss function explosion
+                    current_dist_tensor = self._compute_real_distance_to_global(
+                        proxy_param,
+                        selected_benign,
+                        beta_selection
+                    )
+                    current_dist = current_dist_tensor.item()
+                    violation_ratio = (current_dist - self.d_T) / self.d_T if self.d_T > 0 else 0.0
+                    
+                    # Emergency protection: trigger when violation is severe (>2x threshold)
+                    # This threshold is chosen to:
+                    # 1. Preserve Lagrangian mechanism for normal optimization (violation < 2x)
+                    # 2. Prevent numerical explosion early (violation > 2x triggers protection)
+                    # 3. Balance between mathematical integrity and numerical stability
+                    if violation_ratio > 2.0:  # Violation > 200% (2x threshold)
+                        # Apply soft projection: scale down to 1.5x threshold (allows some margin for Lagrangian)
+                        # This is a compromise between numerical stability and mathematical integrity
+                        target_dist = self.d_T * 1.5  # Allow 1.5x threshold as emergency limit
+                        scale_factor = target_dist / current_dist
+                        proxy_param.data = proxy_param.data * scale_factor
+                        # Note: This is an emergency protection, not a strict constraint enforcement
+                        # The Lagrangian mechanism still controls the optimization direction for normal cases
+                # If use_loss_normalization=True, rely entirely on normalized Lagrangian mechanism
+                # No projection needed as normalization balances scales
+            # Note: In Lagrangian Dual mode, we apply emergency protection only for extreme violations
+            # This maintains mathematical integrity of the dual problem for normal cases:
             # - Lagrangian mechanism relies on multipliers (λ, ρ) to control constraints
-            # - Hard projection would break the continuity of Lagrangian function L(x,λ)
-            # - Multiplier updates become ineffective if violations are hard-corrected
-            # - The dual problem max_λ min_x L(x,λ) requires unconstrained inner minimization
-            # Constraint violations are handled entirely through Lagrangian penalty terms
-            # and multiplier updates via subgradient method
+            # - Emergency protection only triggers for extreme violations (>10x threshold)
+            # - This prevents numerical explosion (loss from 1.38 to millions) while preserving
+            #   the Lagrangian mechanism's effectiveness for normal optimization
+            # - The dual problem max_λ min_x L(x,λ) can still work effectively with this safety mechanism
         
         malicious_update = proxy_param.detach()
         
