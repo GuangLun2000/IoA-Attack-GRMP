@@ -231,8 +231,7 @@ def setup_experiment(config):
                     rho_init=config.get('rho_init', 0.1),
                     lambda_lr=config.get('lambda_lr', 0.01),
                     rho_lr=config.get('rho_lr', 0.01),
-                    enable_final_projection=config.get('enable_final_projection', False),
-                    use_loss_normalization=config.get('use_loss_normalization', False)
+                    enable_final_projection=config.get('enable_final_projection', True)
                 )
                 final_proj_status = "enabled" if config.get('enable_final_projection', True) else "disabled"
                 print(f"    Lagrangian Dual enabled: λ(1)={config.get('lambda_init', 0.1)}, ρ(1)={config.get('rho_init', 0.1)}, final projection={final_proj_status}")
@@ -662,7 +661,7 @@ def main():
         'attack_start_round': 0,  # Round when attack phase starts (int, now all rounds use complete poisoning)
         
         # ========== Formula 4 Constraint Parameters ==========
-        'd_T': 1.0,  # Distance threshold for constraint (4b): d(w'_j(t), w'_g(t)) ≤ d_T
+        'd_T': 2.0,  # Distance threshold for constraint (4b): d(w'_j(t), w'_g(t)) ≤ d_T
         'gamma': 5.0,  # Upper bound for constraint (4c): Σ β'_{i,j}(t) d(w_i(t), w̄_i(t)) ≤ Γ
         
         # ========== VGAE Training Parameters ==========
@@ -681,8 +680,8 @@ def main():
         # ========== Attack Optimization Parameters ==========
         'proxy_step': 0.1,  # Step size for gradient-free ascent toward global-loss proxy
         'proxy_steps': 30,  # Number of optimization steps for attack objective (int)
-        'gsp_perturbation_scale': 0.1,  # Perturbation scale for GSP attack diversity (float)
-        'opt_init_perturbation_scale': 0.05,  # Perturbation scale for optimization initialization (float)
+        'gsp_perturbation_scale': 0.01,  # Perturbation scale for GSP attack diversity (float)
+        'opt_init_perturbation_scale': 0.01,  # Perturbation scale for optimization initialization (float)
         'grad_clip_norm': 1.0,  # Gradient clipping norm for training stability (float)
         
         # ========== Lagrangian Dual Parameters ==========
@@ -691,15 +690,12 @@ def main():
                                     # If True, uses Lagrangian penalty terms (per paper eq:lagrangian and eq:wprime_sub)
         'enable_final_projection': False,  # Whether to apply final projection after optimization (bool, True/False)
                                     # If True (default), applies final projection as safeguard
-        'use_loss_normalization': True,  # Whether to normalize global_loss in Lagrangian objective (bool, True/False)
-                                    # If True, normalizes global_loss to balance scale with constraint terms
-                                    # This can make Lagrangian mechanism effective without projection
-                                    # Mathematical justification: Normalization doesn't change optimization direction
-                                    # but balances gradient magnitudes, making constraints effective
         'lambda_init': 10,  # Initial λ(t) value (λ(1)≥0, per paper Algorithm 1)
         'rho_init': 0.1,     # Initial ρ(t) value (ρ(1)≥0, per paper Algorithm 1)
         'lambda_lr': 0.1,  # Learning rate for λ(t) update (subgradient step size)
         'rho_lr': 0.01,   # Learning rate for ρ(t) update (subgradient step size)
+        # 'attacker_claimed_data_size': None,  # If None, uses actual assigned data size (recommended for realistic scenario)
+        # If set to a value, overrides actual data size (for attack experiments where attacker claims more data)
         'attacker_claimed_data_size': None,  # None = use actual assigned data size (recommended)
         
         # ========== Proxy Loss Estimation Parameters ==========
