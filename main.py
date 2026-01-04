@@ -644,7 +644,6 @@ def main():
         # 'dataset_size_limit': None,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
         'dataset_size_limit': 20000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
 
-
         # ========== Training Mode Configuration ==========
         'use_lora': False,  # True for LoRA fine-tuning, False for full fine-tuning
         # LoRA parameters (only used when use_lora=True)
@@ -690,26 +689,25 @@ def main():
         'use_lagrangian_dual': True,  # Whether to use Lagrangian Dual mechanism (bool, True/False)
         'enable_light_projection_in_loop': False,  # Whether to apply light projection within optimization loop (bool, True/False)
         'enable_final_projection': False,  # Whether to apply final projection after optimization (bool, True/False)
-        'lambda_init': 1000,  # Initial λ(t) value (λ(1)≥0, per paper Algorithm 1)
+        'lambda_init': 10000,  # Initial λ(t) value (λ(1)≥0, per paper Algorithm 1)
         'rho_init': 0.1,     # Initial ρ(t) value (ρ(1)≥0, per paper Algorithm 1)
         'lambda_lr': 0.1,  # Learning rate for λ(t) update (subgradient step size)
         'rho_lr': 0.01,   # Learning rate for ρ(t) update (subgradient step size)
         
         # ========== Proxy Loss Estimation Parameters ==========
         'proxy_sample_size': 512,  # Number of samples in proxy dataset for F(w'_g) estimation (int)
-                                   # Increased from 128 to 512 for better accuracy (4 batches with test_batch_size=128)
+                                # Increased from 128 to 512 for better accuracy (4 batches with test_batch_size=128)
         'proxy_max_batches_opt': 2,  # Max batches for proxy loss in optimization loop (int)
-                                      # Used during gradient-based optimization (20 steps per round)
+                                # Used during gradient-based optimization (20 steps per round)
         'proxy_max_batches_eval': 4,  # Max batches for proxy loss in final evaluation (int)
-                                       # Used for final attack objective logging (1 call per round)
+                                # Used for final attack objective logging (1 call per round)
         
         # ========== Graph Construction Parameters ==========
         'graph_threshold': 0.5,  # Threshold for graph adjacency matrix binarization in VGAE (float, 0.0-1.0)
         
         # ========== Defense Mechanism Parameters ==========
         'enable_defense': False,  # Whether to enable defense mechanism (bool, True/False) Fasle for attack baseline experiment.
-                                      # Note: When False, defense filtering is disabled but 
-                                      # Cosine Similarity and Euclidean Distance are still computed for visualization
+                                    # Note: When False, defense filtering is disabled but Cosine Similarity and Euclidean Distance are still computed for visualization
         'defense_threshold': 0.1,  # Base threshold for defense mechanism (float, lower = more strict)
             # Set to 0 for attack baseline experiment. Baseline 0.3
         'tolerance_factor': 3.0,  # Tolerance factor for defense mechanism (float, higher = more lenient). Baseline experiment uses 3.0.
