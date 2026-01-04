@@ -293,6 +293,7 @@ class AttackerClient(Client):
         self.lambda_init_value = None  # Save initial λ value for reset in prepare_for_round
         self.rho_init_value = None     # Save initial ρ value for reset in prepare_for_round
         self.enable_final_projection = True  # Whether to apply final projection after optimization (only for Lagrangian mode)
+        self.enable_light_projection_in_loop = True  # Whether to apply light projection within optimization loop (only for Lagrangian mode)
         
         # Track violation history for adaptive λ initialization (Optimization)
         self.last_violation = None  # Last round's constraint violation value (distance, not violation amount)
@@ -1258,7 +1259,8 @@ class AttackerClient(Client):
                               rho_init: float = 0.1,
                               lambda_lr: float = 0.01,
                               rho_lr: float = 0.01,
-                              enable_final_projection: bool = True):
+                              enable_final_projection: bool = True,
+                              enable_light_projection_in_loop: bool = True):
         """
         Set Lagrangian Dual parameters (initialized according to paper Algorithm 1)
         
@@ -1275,6 +1277,8 @@ class AttackerClient(Client):
             rho_lr: Learning rate for ρ(t) update (subgradient step size)
             enable_final_projection: Whether to apply final projection after optimization (only for Lagrangian mode)
                                    If False, completely relies on Lagrangian mechanism (no final projection)
+            enable_light_projection_in_loop: Whether to apply light projection within optimization loop (only for Lagrangian mode)
+                                           If False, no projection within optimization loop, only relies on Lagrangian mechanism
         
         Modification 2: Save initial values for reset in prepare_for_round
         """
@@ -1289,6 +1293,7 @@ class AttackerClient(Client):
             self.lambda_lr = lambda_lr
             self.rho_lr = rho_lr
             self.enable_final_projection = enable_final_projection
+            self.enable_light_projection_in_loop = enable_light_projection_in_loop
         else:
             # Hard constraint projection mode
             self.lambda_dt = None
@@ -1296,6 +1301,7 @@ class AttackerClient(Client):
             self.lambda_init_value = None
             self.rho_init_value = None
             self.enable_final_projection = True  # Default to True for hard constraint mode (always applies projection)
+            self.enable_light_projection_in_loop = False  # Not applicable in hard constraint mode
 
     def _compute_global_loss(self, malicious_update: torch.Tensor, 
                             selected_benign: List[torch.Tensor],
@@ -2092,20 +2098,21 @@ class AttackerClient(Client):
                 # Check within optimization loop, if violation exceeds 20%, immediately apply light projection to prevent path deviation
                 # This maintains Lagrangian flexibility while ensuring constraints are promptly safeguarded
                 # Use real distance calculation according to paper Constraint (4b)
-                dist_to_global_for_projection_tensor = self._compute_real_distance_to_global(
-                    proxy_param,
-                    selected_benign,
-                    beta_selection
-                )
-                dist_to_global_for_projection = dist_to_global_for_projection_tensor.item()
-                
-                violation_ratio = (dist_to_global_for_projection - self.d_T) / self.d_T if self.d_T > 0 else 0.0
-                
-                if violation_ratio > 0.20:  # Apply light projection when violation exceeds 20%
-                    # Light projection to 1.1 × d_T, leaving 10% margin to allow Lagrangian to continue optimizing
-                    target_dist = self.d_T * 1.1
-                    scale_factor = target_dist / dist_to_global_for_projection
-                    proxy_param.data = proxy_param.data * scale_factor
+                if self.enable_light_projection_in_loop:
+                    dist_to_global_for_projection_tensor = self._compute_real_distance_to_global(
+                        proxy_param,
+                        selected_benign,
+                        beta_selection
+                    )
+                    dist_to_global_for_projection = dist_to_global_for_projection_tensor.item()
+                    
+                    violation_ratio = (dist_to_global_for_projection - self.d_T) / self.d_T if self.d_T > 0 else 0.0
+                    
+                    if violation_ratio > 0.20:  # Apply light projection when violation exceeds 20%
+                        # Light projection to 1.1 × d_T, leaving 10% margin to allow Lagrangian to continue optimizing
+                        target_dist = self.d_T * 1.1
+                        scale_factor = target_dist / dist_to_global_for_projection
+                        proxy_param.data = proxy_param.data * scale_factor
         
         malicious_update = proxy_param.detach()
         

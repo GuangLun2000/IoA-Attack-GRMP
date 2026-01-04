@@ -231,10 +231,12 @@ def setup_experiment(config):
                     rho_init=config.get('rho_init', 0.1),
                     lambda_lr=config.get('lambda_lr', 0.01),
                     rho_lr=config.get('rho_lr', 0.01),
-                    enable_final_projection=config.get('enable_final_projection', True)
+                    enable_final_projection=config.get('enable_final_projection', True),
+                    enable_light_projection_in_loop=config.get('enable_light_projection_in_loop', True)
                 )
                 final_proj_status = "enabled" if config.get('enable_final_projection', True) else "disabled"
-                print(f"    Lagrangian Dual enabled: λ(1)={config.get('lambda_init', 0.1)}, ρ(1)={config.get('rho_init', 0.1)}, final projection={final_proj_status}")
+                light_proj_status = "enabled" if config.get('enable_light_projection_in_loop', True) else "disabled"
+                print(f"    Lagrangian Dual enabled: λ(1)={config.get('lambda_init', 0.1)}, ρ(1)={config.get('rho_init', 0.1)}, final projection={final_proj_status}, light projection in loop={light_proj_status}")
             else:
                 print(f"    Using hard constraint projection (Lagrangian Dual disabled)")
 
@@ -686,11 +688,9 @@ def main():
 
         # ========== Lagrangian Dual Parameters ==========
         'use_lagrangian_dual': True,  # Whether to use Lagrangian Dual mechanism (bool, True/False)
-                                    # If False, uses hard constraint projection
-                                    # If True, uses Lagrangian penalty terms (per paper eq:lagrangian and eq:wprime_sub)
+        'enable_light_projection_in_loop': False,  # Whether to apply light projection within optimization loop (bool, True/False)
         'enable_final_projection': False,  # Whether to apply final projection after optimization (bool, True/False)
-                                    # If True (default), applies final projection as safeguard
-        'lambda_init': 10,  # Initial λ(t) value (λ(1)≥0, per paper Algorithm 1)
+        'lambda_init': 1000,  # Initial λ(t) value (λ(1)≥0, per paper Algorithm 1)
         'rho_init': 0.1,     # Initial ρ(t) value (ρ(1)≥0, per paper Algorithm 1)
         'lambda_lr': 0.1,  # Learning rate for λ(t) update (subgradient step size)
         'rho_lr': 0.01,   # Learning rate for ρ(t) update (subgradient step size)
