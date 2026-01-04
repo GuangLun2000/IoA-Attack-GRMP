@@ -2108,7 +2108,7 @@ class AttackerClient(Client):
                     
                     violation_ratio = (dist_to_global_for_projection - self.d_T) / self.d_T if self.d_T > 0 else 0.0
                     
-                    if violation_ratio > 0.20:  # Apply light projection when violation exceeds 20%
+                    if violation_ratio > 1:  # Apply light projection when violation exceeds 20%
                         # Light projection to 1.1 × d_T, leaving 10% margin to allow Lagrangian to continue optimizing
                         target_dist = self.d_T * 1.1
                         scale_factor = target_dist / dist_to_global_for_projection
