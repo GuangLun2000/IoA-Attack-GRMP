@@ -664,7 +664,7 @@ def main():
         
         # ========== Formula 4 Constraint Parameters ==========
         'd_T': 1.0,  # Distance threshold for constraint (4b): d(w'_j(t), w'_g(t)) ≤ d_T
-        'gamma': 3.0,  # Upper bound for constraint (4c): Σ β'_{i,j}(t) d(w_i(t), w̄_i(t)) ≤ Γ
+        'gamma': 5.0,  # Upper bound for constraint (4c): Σ β'_{i,j}(t) d(w_i(t), w̄_i(t)) ≤ Γ
         
         # ========== VGAE Training Parameters ==========
         # Reference paper: input_dim=5, hidden1_dim=32, hidden2_dim=16, num_epoch=10, lr=0.01
@@ -680,10 +680,10 @@ def main():
         'vgae_dropout': 0.0,  # VGAE dropout rate (float, 0.0-1.0)
         
         # ========== Attack Optimization Parameters ==========
-        'proxy_step': 0.01,  # Step size for gradient-free ascent toward global-loss proxy
+        'proxy_step': 0.1,  # Step size for gradient-free ascent toward global-loss proxy
         'proxy_steps': 30,  # Number of optimization steps for attack objective (int)
-        'gsp_perturbation_scale': 0.01,  # Perturbation scale for GSP attack diversity (float)
-        'opt_init_perturbation_scale': 0.01,  # Perturbation scale for optimization initialization (float)
+        'gsp_perturbation_scale': 0.05,  # Perturbation scale for GSP attack diversity (float)
+        'opt_init_perturbation_scale': 0.02,  # Perturbation scale for optimization initialization (float)
         'grad_clip_norm': 1.0,  # Gradient clipping norm for training stability (float)
         'attacker_claimed_data_size': None,  # None = use actual assigned data size
 
@@ -691,7 +691,7 @@ def main():
         'use_lagrangian_dual': True,  # Whether to use Lagrangian Dual mechanism (bool, True/False)
         'enable_light_projection_in_loop': False,  # Whether to apply light projection within optimization loop (bool, True/False)
         'enable_final_projection': False,  # Whether to apply final projection after optimization (bool, True/False)
-        'lambda_init': 1,  # Initial λ(t) value (λ(1)≥0, per paper Algorithm 1)
+        'lambda_init': 100,  # Initial λ(t) value (λ(1)≥0, per paper Algorithm 1)
         'rho_init': 0.1,     # Initial ρ(t) value (ρ(1)≥0, per paper Algorithm 1)
         'lambda_lr': 0.1,  # Learning rate for λ(t) update (subgradient step size)
         'rho_lr': 0.1,   # Learning rate for ρ(t) update (subgradient step size)
