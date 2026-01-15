@@ -7,10 +7,50 @@ import torch.optim as optim
 import torch.nn.functional as F
 import copy
 import numpy as np
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from tqdm import tqdm
 from models import VGAE
 from torch.nn.utils import stateless
+# ============================================================================
+# CRITICAL: Functional call wrapper for LoRA gradient preservation
+# ============================================================================
+# Purpose: Use torch.func.functional_call to preserve gradients when injecting
+#          LoRA parameters into the model forward pass. This ensures the
+#          computational graph remains intact from proxy_param to loss.
+#
+# API Note: torch.func.functional_call (PyTorch 2.0+) takes (params, buffers) tuple
+#           stateless.functional_call (PyTorch < 2.0) only takes params dict
+# ============================================================================
+try:
+    from torch.func import functional_call as _torch_func_call
+    def functional_call(model, params_buffers, args=(), kwargs=None):
+        """
+        Wrapper for torch.func.functional_call (PyTorch 2.0+).
+        
+        Args:
+            model: PyTorch model
+            params_buffers: Tuple of (params_dict, buffers_dict)
+            args: Positional arguments for forward pass
+            kwargs: Keyword arguments for forward pass
+            
+        Returns:
+            Model output with preserved gradients
+        """
+        params, buffers = params_buffers
+        return _torch_func_call(model, (params, buffers), args=args, kwargs=kwargs or {})
+except ImportError:
+    # Fallback for older PyTorch versions (< 2.0)
+    from torch.nn.utils.stateless import functional_call as _stateless_call
+    def functional_call(model, params_buffers, args=(), kwargs=None):
+        """
+        Fallback wrapper for torch.nn.utils.stateless.functional_call (PyTorch < 2.0).
+        
+        Note: stateless.functional_call doesn't support buffers parameter, so we only
+              pass params. This is acceptable because buffers are typically constant
+              and don't need to be injected for gradient preservation.
+        """
+        params, buffers = params_buffers
+        return _stateless_call(model, params, args=args, kwargs=kwargs or {})
 
 # Client class for federated learning
 class Client:
@@ -309,6 +349,17 @@ class AttackerClient(Client):
         # Get model parameter count (works on CPU model)
         self._flat_numel = int(self.model.get_flat_params().numel())  # Convert to Python int
         
+        # ===== CRITICAL: LoRA functional_call cache for gradient preservation =====
+        # These will be initialized in _init_functional_param_cache() when needed
+        self.lora_param_names: List[str] = []  # Ordered list of LoRA parameter names
+        self.lora_param_shapes: Dict[str, torch.Size] = {}  # Shape for each LoRA param
+        self.lora_param_numels: Dict[str, int] = {}  # Numel for each LoRA param
+        self.lora_param_slices: Dict[str, slice] = {}  # Slice in flat tensor for each LoRA param
+        self.base_params: Dict[str, torch.Tensor] = {}  # Frozen base parameters (detached)
+        self.base_buffers: Dict[str, torch.Tensor] = {}  # Buffers (detached)
+        self._functional_cache_initialized = False  # Cache initialization flag
+        # ============================================================================
+        
         # Validate and adjust dim_reduction_size for LoRA mode
         # In LoRA mode, if dim_reduction_size > actual LoRA params, use all LoRA params
         # Rationale: When LoRA params are already small, using all of them is more reasonable
@@ -340,6 +391,17 @@ class AttackerClient(Client):
         self.set_round(round_num)
         # Data-agnostic attacker keeps an empty loader
         self.data_loader = self.data_manager.get_empty_loader()
+
+        # ===== CRITICAL: Reset functional cache for new round =====
+        # Model structure may change between rounds, so cache must be reset
+        self._functional_cache_initialized = False
+        self.lora_param_names = []
+        self.lora_param_shapes = {}
+        self.lora_param_numels = {}
+        self.lora_param_slices = {}
+        self.base_params = {}
+        self.base_buffers = {}
+        # ============================================================
 
         # Modification 1: Reset Lagrangian multipliers (with adaptive initialization based on history)
         # Reason: Prevent λ and ρ from accumulating across rounds, which causes numerical instability and optimization imbalance
@@ -771,6 +833,134 @@ class AttackerClient(Client):
         for child in module.children():
             self._ensure_model_on_device(child, target_device)
 
+    def _init_functional_param_cache(self, target_device: torch.device):
+        """
+        Initialize cache for functional_call with full parameters (base + LoRA).
+        
+        CRITICAL: This must be called before using functional_call in LoRA mode.
+        Caches LoRA parameter metadata and base parameters/buffers for gradient-preserving forward.
+        
+        What this function does:
+        1. Collects LoRA parameters (trainable) in the same order as get_flat_params()
+        2. Caches base parameters (frozen, detached) to avoid repeated lookups
+        3. Caches buffers (detached) for functional_call
+        4. Verifies dimension consistency (sum(LoRA numel) == _flat_numel)
+        5. Verifies parameter name completeness (base + LoRA = all params)
+        
+        Args:
+            target_device: Device to cache parameters on (typically GPU)
+        
+        Raises:
+            AssertionError: If dimension consistency checks fail
+            RuntimeError: If parameter name lookup fails
+        """
+        if self._functional_cache_initialized:
+            return  # Already initialized
+        
+        use_lora = hasattr(self.model, 'use_lora') and self.model.use_lora
+        if not use_lora:
+            # Full fine-tuning mode doesn't need special caching
+            self._functional_cache_initialized = True
+            return
+        
+        # Step 1: Build LoRA parameter metadata (trainable parameters only)
+        self.lora_param_names = []
+        self.lora_param_shapes = {}
+        self.lora_param_numels = {}
+        offset = 0
+        
+        # Collect LoRA parameters in the same order as get_flat_params()
+        for param in self.model.parameters():
+            if param.requires_grad:
+                name = None
+                # Find parameter name by matching object identity
+                for n, p in self.model.named_parameters():
+                    if p is param:
+                        name = n
+                        break
+                
+                if name is None:
+                    raise RuntimeError(f"[Attacker {self.client_id}] Failed to find name for LoRA parameter")
+                
+                numel = int(param.numel())
+                self.lora_param_names.append(name)
+                self.lora_param_shapes[name] = param.shape
+                self.lora_param_numels[name] = numel
+                self.lora_param_slices[name] = slice(offset, offset + numel)
+                offset += numel
+        
+        # Step 2: Build base parameters dict (frozen parameters, detached)
+        self.base_params = {}
+        for name, param in self.model.named_parameters():
+            if not param.requires_grad:
+                # Frozen base parameter - detach and move to target device
+                with torch.no_grad():
+                    base_param = param.data.clone().detach().to(target_device)
+                self.base_params[name] = base_param
+        
+        # Step 3: Build buffers dict (detached)
+        self.base_buffers = {}
+        for name, buffer in self.model.named_buffers():
+            with torch.no_grad():
+                base_buffer = buffer.data.clone().detach().to(target_device)
+            self.base_buffers[name] = base_buffer
+        
+        # Step 4: Consistency assertions (CRITICAL)
+        total_lora_numel = sum(self.lora_param_numels.values())
+        assert total_lora_numel == self._flat_numel, \
+            f"[Attacker {self.client_id}] LoRA dimension mismatch: " \
+            f"sum(numel)={total_lora_numel}, _flat_numel={self._flat_numel}"
+        
+        all_param_names = set(dict(self.model.named_parameters()).keys())
+        expected_param_names = set(self.base_params.keys()) | set(self.lora_param_names)
+        assert all_param_names == expected_param_names, \
+            f"[Attacker {self.client_id}] Parameter name mismatch: " \
+            f"model has {all_param_names}, cache has {expected_param_names}"
+        
+        self._functional_cache_initialized = True
+        print(f"    [Attacker {self.client_id}] Functional cache initialized: "
+              f"{len(self.lora_param_names)} LoRA params, {len(self.base_params)} base params, "
+              f"{len(self.base_buffers)} buffers")
+
+    def _flat_to_lora_param_dict(self, flat_lora: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """
+        Convert flat LoRA tensor to parameter dict for functional_call.
+        
+        CRITICAL: This preserves gradients by using view/reshape operations only.
+        No .data operations that would break the computational graph.
+        
+        How it works:
+        - Uses pre-computed slices (from _init_functional_param_cache) to extract
+          each parameter from the flat tensor
+        - Uses .view() to reshape without copying (preserves gradients)
+        - Order must match get_flat_params() to ensure correctness
+        
+        Args:
+            flat_lora: 1D flat LoRA parameter tensor (requires_grad=True, on GPU)
+                      Should have shape (self._flat_numel,)
+        
+        Returns:
+            Dictionary mapping LoRA parameter names to shaped tensors (preserves gradients)
+            Each tensor maintains requires_grad=True and gradient flow
+        
+        Raises:
+            RuntimeError: If functional cache not initialized
+        """
+        if not self._functional_cache_initialized:
+            raise RuntimeError(f"[Attacker {self.client_id}] Functional cache not initialized. "
+                             f"Call _init_functional_param_cache() first.")
+        
+        flat_lora = flat_lora.view(-1)  # Ensure 1D
+        
+        out = {}
+        for name in self.lora_param_names:
+            sl = self.lora_param_slices[name]
+            shape = self.lora_param_shapes[name]
+            # CRITICAL: Use view/reshape to preserve gradients, no copy_() or .data assignment
+            out[name] = flat_lora[sl].view(shape)
+        
+        return out
+
     def _proxy_global_loss(self, malicious_update: torch.Tensor, max_batches: int = 1, 
                            skip_dim_check: bool = False, keep_model_on_gpu: bool = False) -> torch.Tensor:
         """
@@ -844,8 +1034,20 @@ class AttackerClient(Client):
             
             candidate_params = global_params_gpu + malicious_update
             
-            # Skip dimension check if already validated (performance optimization)
-            param_dict = self._flat_to_param_dict(candidate_params, skip_dim_check=skip_dim_check)
+            # CRITICAL: Check LoRA mode BEFORE processing to avoid unnecessary work
+            use_lora = hasattr(self.model, 'use_lora') and self.model.use_lora
+            
+            # ===== CRITICAL: Initialize functional cache for LoRA mode =====
+            # This must be done before any parameter processing
+            if use_lora:
+                self._init_functional_param_cache(target_device)
+            # ===================================================================
+            
+            # For full fine-tuning mode, prepare param_dict (LoRA mode doesn't need this)
+            param_dict = {}
+            if not use_lora:
+                # Skip dimension check if already validated (performance optimization)
+                param_dict = self._flat_to_param_dict(candidate_params, skip_dim_check=skip_dim_check)
 
             # CRITICAL FIX: Ensure all parameters in param_dict are on the correct device
             # Normalize device: always use 'cuda:0' for consistency  
@@ -878,123 +1080,72 @@ class AttackerClient(Client):
                 input_ids = batch['input_ids'].to(target_device)
                 attention_mask = batch['attention_mask'].to(target_device)
                 labels = batch['labels'].to(target_device)
-
-                # CRITICAL FIX: For LoRA/PEFT models, stateless.functional_call has device issues
-                # Use direct parameter setting method instead, which gives us full control over devices
-                use_lora = hasattr(self.model, 'use_lora') and self.model.use_lora
                 
                 if use_lora:
-                    # For LoRA models, try stateless.functional_call first to preserve gradients
-                    # CRITICAL FIX: Previously used param.data.copy_() in no_grad(), which broke gradients
-                    # Now we try stateless.functional_call first, which preserves gradients properly
-                    logits = None
+                    # ============================================================================
+                    # CRITICAL: LoRA mode with functional_call (NO FALLBACK)
+                    # ============================================================================
+                    # This path MUST preserve gradients from proxy_param to loss.
+                    # PROHIBITED: NO .data operations, NO copy_(), NO no_grad() write operations
+                    #
+                    # Flow:
+                    #   1. candidate_lora_flat = global_params + malicious_update (LoRA-only flat)
+                    #   2. lora_params = _flat_to_lora_param_dict(candidate_lora_flat) [preserves gradients]
+                    #   3. full_params = base_params (detached) + lora_params (with gradients)
+                    #   4. functional_call(model, (full_params, full_buffers)) [preserves gradients]
+                    #   5. loss = F.cross_entropy(logits, labels) [gradient flows back to proxy_param]
+                    # ============================================================================
+                    
+                    # Step 1: Ensure candidate is LoRA-only flat (from global + malicious_update)
+                    # candidate_params is already computed as: global_params_gpu + malicious_update
+                    # Both global_params_gpu and malicious_update are LoRA-only flat tensors
+                    candidate_lora_flat = candidate_params
+                    
+                    # Step 2: Convert flat LoRA to param dict (preserves gradients via view/reshape)
+                    # Uses pre-computed slices from _init_functional_param_cache to extract each parameter
+                    # Maintains requires_grad=True throughout, preserving computational graph
+                    lora_params = self._flat_to_lora_param_dict(candidate_lora_flat)
+                    
+                    # Step 3: Construct full_params = base_params (constants) + lora_params (trainable)
+                    # CRITICAL: base_params are detached constants (requires_grad=False),
+                    #          lora_params maintain gradients (requires_grad=True)
+                    full_params = dict(self.base_params)  # Shallow copy of base params (detached)
+                    full_params.update(lora_params)  # Add LoRA params (with gradients)
+                    
+                    # Step 4: Ensure base_buffers are on correct device
+                    # Buffers are constants (e.g., batch norm running means), no gradients needed
+                    full_buffers = {}
+                    for name, buf in self.base_buffers.items():
+                        if not self._device_matches(buf.device, target_device):
+                            full_buffers[name] = buf.to(target_device)
+                        else:
+                            full_buffers[name] = buf
+                    
+                    # Step 5: Use functional_call for forward pass (preserves gradients)
+                    # CRITICAL: This is the ONLY valid path - no fallback allowed
+                    # functional_call injects parameters without breaking computational graph
+                    # If this fails, it indicates a configuration error, not a recoverable issue
                     try:
-                        # First ensure model is on correct device
-                        self.model.to(target_device)
-                        self._ensure_model_on_device(self.model, target_device)
-                        
-                        # Try stateless.functional_call first (preserves gradients)
-                        logits = stateless.functional_call(
+                        logits = functional_call(
                             self.model,
-                            param_dict,
+                            (full_params, full_buffers),
                             args=(),
                             kwargs={'input_ids': input_ids, 'attention_mask': attention_mask}
                         )
                     except (RuntimeError, KeyError, TypeError) as e:
-                        # If stateless.functional_call fails, use fallback with explicit gradient preservation
-                        # CRITICAL: Must preserve gradients to malicious_update
-                        original_params = {}
-                        try:
-                            # Ensure ALL parameters (including base model) are on target device
-                            self.model.to(target_device)
-                            self._ensure_model_on_device(self.model, target_device)
-                            
-                            # Verify all parameters are on correct device before setting new values
-                            for name, param in self.model.named_parameters():
-                                if not self._device_matches(param.device, target_device):
-                                    with torch.no_grad():
-                                        param.data = param.data.to(target_device, non_blocking=True)
-                            
-                            # Verify all buffers are on correct device
-                            for name, buffer in self.model.named_buffers():
-                                if not self._device_matches(buffer.device, target_device):
-                                    buffer.data = buffer.data.to(target_device, non_blocking=True)
-                            
-                            # CRITICAL FIX: Set parameters WITHOUT no_grad() to preserve gradients
-                            # The param_dict values come from candidate_params = global_params + malicious_update
-                            # By NOT using no_grad(), we maintain the computational graph
-                            for name, param in self.model.named_parameters():
-                                if name in param_dict:
-                                    # Save original parameter value (with no_grad for original value only)
-                                    with torch.no_grad():
-                                        original_params[name] = param.data.clone()
-                                    # Get new parameter value from param_dict (preserves gradients from candidate_params)
-                                    new_value = param_dict[name]
-                                    # Ensure new_value is on target_device (preserves gradients)
-                                    if not self._device_matches(new_value.device, target_device):
-                                        new_value = new_value.to(target_device, non_blocking=True)
-                                    # Ensure data type matches (preserves gradients)
-                                    if new_value.dtype != param.dtype:
-                                        new_value = new_value.to(dtype=param.dtype)
-                                    # CRITICAL: Use param.set_() or direct assignment to preserve gradients
-                                    # param.data.copy_() in no_grad() would break gradients
-                                    # Instead, we use direct assignment which maintains computational graph
-                                    param.data = new_value
-                            
-                            # Final check: ensure all parameters are still on correct device after setting
-                            # CRITICAL: This must be done before forward pass to avoid device mismatch in backward
-                            # Use multiple methods to ensure everything is on GPU
-                            self.model.to(target_device)  # Force move model to GPU
-                            self._ensure_model_on_device(self.model, target_device)  # Recursive check
-                            
-                            # One final verification before forward pass
-                            # Check ALL parameters (including base model params in LoRA mode)
-                            # This is critical for LoRA models where base model params might not be moved correctly
-                            for name, param in self.model.named_parameters():
-                                if not self._device_matches(param.device, target_device):
-                                    print(f"    [Attacker {self.client_id}] FINAL PRE-FORWARD: Parameter {name} on {param.device}, fixing...")
-                                    with torch.no_grad():
-                                        param.data = param.data.to(target_device, non_blocking=True)
-                            for name, buffer in self.model.named_buffers():
-                                if not self._device_matches(buffer.device, target_device):
-                                    print(f"    [Attacker {self.client_id}] FINAL PRE-FORWARD: Buffer {name} on {buffer.device}, fixing...")
-                                    buffer.data = buffer.data.to(target_device, non_blocking=True)
-                            
-                            # One more recursive check after fixing individual parameters
-                            self._ensure_model_on_device(self.model, target_device)
-                            
-                            # Run forward pass
-                            # CRITICAL: All parameters and buffers MUST be on target_device at this point
-                            # The computation graph created here will be used for backward, so device consistency is essential
-                            logits = self.model(input_ids=input_ids, attention_mask=attention_mask)
-                            
-                            # WARNING: Fallback method may not preserve gradients correctly
-                            # param.data = new_value does NOT create gradient connections
-                            # If this path is taken, gradients to malicious_update may be broken
-                            # This is a known limitation - stateless.functional_call should be preferred
-                            
-                        except Exception as fallback_error:
-                            print(f"    [Attacker {self.client_id}] LoRA fallback method failed: {fallback_error}")
-                            logits = None
-                        finally:
-                            # Restore original parameters (always restore, even on error)
-                            # CRITICAL: Use no_grad() for parameter restoration to avoid tracking gradients
-                            with torch.no_grad():
-                                for name, param in self.model.named_parameters():
-                                    if name in original_params:
-                                        restored_value = original_params[name]
-                                        if not self._device_matches(restored_value.device, target_device):
-                                            restored_value = restored_value.to(target_device, non_blocking=True)
-                                        param.data.copy_(restored_value)
-                        
-                        if logits is None:
-                            raise RuntimeError(f"LoRA fallback method failed for attacker {self.client_id}")
-                        
-                        # CRITICAL WARNING: Fallback method does NOT preserve gradients
-                        # Verify that logits is not detached from computational graph
-                        if not logits.requires_grad:
-                            print(f"    [Attacker {self.client_id}] WARNING: LoRA fallback produced logits without gradients!")
-                            print(f"    [Attacker {self.client_id}] Optimization may fail - gradients to malicious_update are broken")
+                        # FATAL ERROR: functional_call failure indicates configuration problem
+                        # Possible causes:
+                        #   1. Parameter names don't match (check _init_functional_param_cache)
+                        #   2. Missing parameters/buffers in full_params/full_buffers
+                        #   3. Device mismatch between params and model
+                        #   4. Model structure incompatibility with functional_call
+                        error_msg = (
+                            f"[Attacker {self.client_id}] FATAL: functional_call failed in LoRA mode: {e}\n"
+                            f"This indicates a configuration error - functional_call MUST work.\n"
+                            f"Check: (1) Parameter names match, (2) All params/buffers present, "
+                            f"(3) Device consistency, (4) Model structure compatibility."
+                        )
+                        raise RuntimeError(error_msg) from e
                 
                 else:
                     # For full fine-tuning, try stateless.functional_call first
@@ -1876,6 +2027,23 @@ class AttackerClient(Client):
             self._ensure_model_on_device(self.model, target_device)
             self._model_on_gpu = True
         
+        # ===== CRITICAL: Initialize functional cache for LoRA mode =====
+        # This must be done before optimization loop starts
+        use_lora = hasattr(self.model, 'use_lora') and self.model.use_lora
+        if use_lora:
+            self._init_functional_param_cache(target_device)
+            # Ensure base_params and base_buffers are on GPU (cache them on GPU)
+            # This avoids repeated device transfers during optimization loop
+            if not all(p.device.type == target_device.type for p in self.base_params.values()):
+                for name in self.base_params:
+                    self.base_params[name] = self.base_params[name].to(target_device)
+            if not all(b.device.type == target_device.type for b in self.base_buffers.values()):
+                for name in self.base_buffers:
+                    self.base_buffers[name] = self.base_buffers[name].to(target_device)
+        # Store use_lora for use in optimization loop
+        self._use_lora_in_optimization = use_lora
+        # ===================================================================
+        
         # OPTIMIZATION 2: Cache constraint (4c) value before optimization loop
         # Constraint (4c): Σ β'_{i,j}(t)^* d(w_i(t), w̄_i(t)) is a constant during optimization
         # because selected_benign does not change during the loop
@@ -2005,7 +2173,7 @@ class AttackerClient(Client):
                 # Compute constraint violations (for updating λ and ρ)
                 # ============================================================
                 constraint_b_violation = F.relu(dist_to_global_for_objective - self.d_T) if self.d_T is not None else torch.tensor(0.0, device=self.device)
-                
+            
                 # ===== CONSTRAINT (4c) COMMENTED OUT =====
                 # constraint_c_violation = torch.tensor(0.0, device=self.device)
                 # if self.gamma is not None and len(selected_benign) > 0:
@@ -2063,19 +2231,55 @@ class AttackerClient(Client):
             # Backpropagate Lagrangian objective
             lagrangian_objective.backward()
             
-            # CRITICAL: Verify that gradients are preserved for proxy_param
-            # This checks if the optimization objective actually depends on proxy_param
+            # ===== CRITICAL: Gradient verification (strict check) =====
+            # This ensures the computational graph is intact and proxy_param receives gradients
             if proxy_param.grad is not None:
                 grad_norm = proxy_param.grad.norm().item()
                 if grad_norm < 1e-8:
-                    print(f"      [Attacker {self.client_id}] WARNING: Gradient norm is very small ({grad_norm:.2e})")
-                    print(f"      [Attacker {self.client_id}] This may indicate gradient flow is broken (e.g., in LoRA fallback mode)")
-                # Optional: Log gradient norm for debugging (commented out to avoid spam)
-                # elif step % 10 == 0:
-                #     print(f"      [Attacker {self.client_id}] Step {step}: gradient_norm={grad_norm:.4f}")
+                    print(f"      [Attacker {self.client_id}] ERROR: Gradient norm is too small ({grad_norm:.2e})")
+                    print(f"      [Attacker {self.client_id}] This indicates gradient flow is broken!")
+                    # In LoRA mode, this should NEVER happen with functional_call
+                    if self._use_lora_in_optimization:
+                        print(f"      [Attacker {self.client_id}] FATAL: LoRA functional_call gradient check failed at step {step}")
             else:
                 print(f"      [Attacker {self.client_id}] ERROR: proxy_param.grad is None!")
                 print(f"      [Attacker {self.client_id}] Optimization is broken - no gradients computed")
+                if self._use_lora_in_optimization:
+                    print(f"      [Attacker {self.client_id}] FATAL: LoRA functional_call produced no gradients at step {step}")
+            
+            # Additional gradient verification: Direct gradient computation check (every 5 steps)
+            # This verifies that global_loss -> proxy_param gradient exists
+            # CRITICAL: This check ensures the computational graph is intact
+            if step % 5 == 0 and self._use_lora_in_optimization:
+                try:
+                    # Save current gradient state
+                    current_grad = proxy_param.grad.clone() if proxy_param.grad is not None else None
+                    # Clear previous gradients for clean check
+                    if proxy_param.grad is not None:
+                        proxy_param.grad.zero_()
+                    # Compute gradient directly from global_loss (without constraint terms)
+                    # This isolates the gradient flow through the proxy loss
+                    g = torch.autograd.grad(
+                        global_loss, 
+                        proxy_param, 
+                        retain_graph=True, 
+                        allow_unused=False,  # Must be False - we require gradients to exist
+                        create_graph=False
+                    )[0]
+                    assert g is not None, f"[Attacker {self.client_id}] Direct gradient computation failed: g is None"
+                    g_norm = g.norm().item()
+                    assert g_norm > 1e-8, \
+                        f"[Attacker {self.client_id}] Direct gradient norm too small: {g_norm:.2e} (gradient link broken)"
+                    # Restore gradients from lagrangian_objective
+                    proxy_param.grad = None
+                    lagrangian_objective.backward()
+                    # Verify restored gradient matches expected (should be from lagrangian_objective)
+                    if proxy_param.grad is None:
+                        raise RuntimeError(f"Gradient not restored after direct check")
+                except Exception as grad_check_error:
+                    print(f"      [Attacker {self.client_id}] FATAL: Gradient verification failed: {grad_check_error}")
+                    raise RuntimeError(f"Gradient verification failed at step {step}") from grad_check_error
+            # ===========================================================
             
             # Gradient clipping to prevent explosion
             torch.nn.utils.clip_grad_norm_([proxy_param], max_norm=self.grad_clip_norm)
@@ -2147,41 +2351,12 @@ class AttackerClient(Client):
                     dist_to_global_for_projection = dist_to_global_for_projection_tensor.item()
                     
                     violation_ratio = (dist_to_global_for_projection - self.d_T) / self.d_T if self.d_T > 0 else 0.0
-
+                    
                     if violation_ratio > 1:
-                        # Light projection to 1.2 × d_T, leaving 10% margin to allow Lagrangian to continue optimizing
+                        # Light projection to 1.5 × d_T, leaving margin to allow Lagrangian to continue optimizing
                         target_dist = self.d_T * 1.5
-
-                    # if violation_ratio > 1:  # Apply light projection when violation exceeds 100%
-                    #     # Dynamic projection strategy: Project to different targets based on violation severity
-                    #     # This provides appropriate optimization space for Lagrangian mechanism while preventing extreme violations
-                    #     if violation_ratio > 100:  # Extreme violation (>10000%): Project to 10×d_T
-                    #         # For violations like 13237.9%, project to 10×d_T to provide substantial optimization space
-                    #         # This allows Lagrangian mechanism to gradually reduce violation over multiple steps
-                    #         target_dist = self.d_T * 10.0
-                    #         projection_type = "extreme"
-                    #     elif violation_ratio > 50:  # Severe violation (5000-10000%): Project to 5×d_T
-                    #         # For severe violations, project to 5×d_T to provide moderate optimization space
-                    #         target_dist = self.d_T * 5.0
-                    #         projection_type = "severe"
-                    #     elif violation_ratio > 10:  # High violation (1000-5000%): Project to 3×d_T
-                    #         # For high violations, project to 3×d_T to provide reasonable optimization space
-                    #         target_dist = self.d_T * 3.0
-                    #         projection_type = "high"
-                    #     elif violation_ratio > 5:  # Moderate violation (500-1000%): Project to 2×d_T
-                    #         # For moderate violations, project to 2×d_T to provide adequate optimization space
-                    #         target_dist = self.d_T * 2.0
-                    #         projection_type = "moderate"
-                    #     else:  # Mild violation (100-500%): Project to 1.5×d_T
-                    #         # For mild violations, project to 1.5×d_T to provide small optimization space
-                    #         target_dist = self.d_T * 1.5
-                    #         projection_type = "mild"
-                        
                         scale_factor = target_dist / dist_to_global_for_projection
                         proxy_param.data = proxy_param.data * scale_factor
-                        # print(f"      [Attacker {self.client_id}] Applied {projection_type} projection: "
-                        #       f"violation={violation_ratio*100:.1f}%, projected from {dist_to_global_for_projection:.4f} to {target_dist:.4f} "
-                        #       f"(scale_factor={scale_factor:.6f})")
         
         malicious_update = proxy_param.detach()
         
