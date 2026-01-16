@@ -645,8 +645,8 @@ def main():
         # ========== Training Hyperparameters ==========
         'client_lr': 2e-5,  # Learning rate for local client training (float)
         'server_lr': 1.0,  # Server learning rate for model aggregation (fixed at 1.0)
-        'batch_size': 32,  # Batch size for local training (int)
-        'test_batch_size': 128,  # Batch size for test/validation data loaders (int)
+        'batch_size': 128,  # Batch size for local training (int)
+        'test_batch_size': 512,  # Batch size for test/validation data loaders (int)
         'local_epochs': 5,  # Number of local training epochs per round (int, per paper Section IV)
         'alpha': 0.05,  # Proximal regularization coefficient α ∈ [0,1] from paper formula (1) (float)
         
@@ -657,7 +657,7 @@ def main():
         # 'dataset_size_limit': 20000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
 
         # ========== Training Mode Configuration ==========
-        'use_lora': True,  # True for LoRA fine-tuning, False for full fine-tuning
+        'use_lora': Flase,  # True for LoRA fine-tuning, False for full fine-tuning
         # LoRA parameters (only used when use_lora=True)
         # NOTE: Lower r values = faster training but potentially less capacity
         # Recommended: r=8 for speed, r=16 for better performance (default)
@@ -666,7 +666,7 @@ def main():
         'lora_dropout': 0.1,  # LoRA dropout rate
         'lora_target_modules': None,  # None = use default for DistilBERT (["q_lin", "k_lin", "v_lin", "out_lin"])
         # Model configuration
-        'model_name': 'microsoft/deberta-v3-base',  # Newer model suitable for single A100
+        'model_name': 'distilbert-base-uncased',  # Hugging Face model name for classification
         'num_labels': 4,  # Number of classification labels
 
         # ========== Attack Configuration ==========
@@ -716,7 +716,7 @@ def main():
         # ==========================================
         
         # ========== Proxy Loss Estimation Parameters ==========
-        'proxy_sample_size': 128,  # Number of samples in proxy dataset for F(w'_g) estimation (int)
+        'proxy_sample_size': 512,  # Number of samples in proxy dataset for F(w'_g) estimation (int)
                                 # Increased from 128 to 512 for better accuracy (4 batches with test_batch_size=128)
         'proxy_max_batches_opt': 1,  # Max batches for proxy loss in optimization loop (int)
                                 # Used during gradient-based optimization (20 steps per round)
