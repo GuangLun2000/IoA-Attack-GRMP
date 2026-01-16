@@ -7,7 +7,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 import copy
 import numpy as np
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from tqdm import tqdm
 from models import VGAE
 from torch.nn.utils import stateless
