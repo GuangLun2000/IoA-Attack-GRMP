@@ -708,7 +708,7 @@ def main():
 
         # ========== Lagrangian Dual Parameters ==========
         'use_lagrangian_dual': True,  # Whether to use Lagrangian Dual mechanism (bool, True/False)
-        'enable_light_projection_in_loop': False,  # Whether to apply light projection within optimization loop (bool, True/False)
+        'enable_light_projection_in_loop': True,  # Whether to apply light projection within optimization loop (bool, True/False)
         'enable_final_projection': False,  # Whether to apply final projection after optimization (bool, True/False)
         
         # Lagrangian multiplier parameters
