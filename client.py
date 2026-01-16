@@ -864,27 +864,40 @@ class AttackerClient(Client):
             return
         
         # Step 1: Build LoRA parameter metadata (trainable parameters only)
-        # CRITICAL: Must use named_parameters() order to match get_flat_params()
-        # get_flat_params() in models.py uses: torch.cat([p.data.view(-1) for p in self.model.parameters() if p.requires_grad])
-        # But we need to match by name, so we use named_parameters() with filtering
+        # ============================================================
+        # CRITICAL: Must match get_flat_params() order EXACTLY
+        # ============================================================
+        # get_flat_params() in models.py uses: 
+        #   for param in self.model.parameters():
+        #       if param.requires_grad:
+        #           lora_params.append(param.data.view(-1))
+        #
+        # Problem: parameters() and named_parameters() order may differ!
+        # Solution: Build a mapping from param object to name, then iterate in parameters() order
+        # ============================================================
         self.lora_param_names = []
         self.lora_param_shapes = {}
         self.lora_param_numels = {}
         self.lora_param_slices = {}
         offset = 0
         
-        # CRITICAL: Use named_parameters() order to ensure consistency with get_flat_params()
-        # Filter trainable parameters and collect in same order as get_flat_params()
-        trainables = [(n, p) for n, p in self.model.named_parameters() if p.requires_grad]
+        # CRITICAL: Build param -> name mapping first
+        # This allows us to iterate in parameters() order (matching get_flat_params())
+        # while still getting parameter names (needed for functional_call)
+        param_to_name = {param: name for name, param in self.model.named_parameters()}
         
-        # Build metadata using trainables order (same as get_flat_params())
-        for name, param in trainables:
-            numel = int(param.numel())
-            self.lora_param_names.append(name)
-            self.lora_param_shapes[name] = param.shape
-            self.lora_param_numels[name] = numel
-            self.lora_param_slices[name] = slice(offset, offset + numel)
-            offset += numel
+        # CRITICAL: Iterate in parameters() order (SAME as get_flat_params() in models.py)
+        # This ensures exact order match, preventing parameter misalignment
+        for param in self.model.parameters():
+            if param.requires_grad:
+                # Get parameter name from mapping
+                name = param_to_name[param]
+                numel = int(param.numel())
+                self.lora_param_names.append(name)
+                self.lora_param_shapes[name] = param.shape
+                self.lora_param_numels[name] = numel
+                self.lora_param_slices[name] = slice(offset, offset + numel)
+                offset += numel
         
         # Step 2: Build base parameters dict (frozen parameters, detached)
         self.base_params = {}
@@ -904,15 +917,33 @@ class AttackerClient(Client):
         
         # Step 4: Consistency assertions (CRITICAL)
         total_lora_numel = sum(self.lora_param_numels.values())
-        assert total_lora_numel == self._flat_numel, \
-            f"[Attacker {self.client_id}] LoRA dimension mismatch: " \
-            f"sum(numel)={total_lora_numel}, _flat_numel={self._flat_numel}"
+        if total_lora_numel != self._flat_numel:
+            # Enhanced error message with diagnostic information
+            model_params_info = f"Model has {len(list(self.model.named_parameters()))} total params, " \
+                              f"{len([p for p in self.model.parameters() if p.requires_grad])} trainable"
+            raise RuntimeError(
+                f"[Attacker {self.client_id}] LoRA dimension mismatch:\n"
+                f"  - Total LoRA numel (from cache): {total_lora_numel}\n"
+                f"  - _flat_numel (from get_flat_params): {self._flat_numel}\n"
+                f"  - LoRA param names: {self.lora_param_names}\n"
+                f"  - {model_params_info}\n"
+                f"This indicates parameter order mismatch between get_flat_params() and _init_functional_param_cache()."
+            )
         
         all_param_names = set(dict(self.model.named_parameters()).keys())
         expected_param_names = set(self.base_params.keys()) | set(self.lora_param_names)
-        assert all_param_names == expected_param_names, \
-            f"[Attacker {self.client_id}] Parameter name mismatch: " \
-            f"model has {all_param_names}, cache has {expected_param_names}"
+        if all_param_names != expected_param_names:
+            missing_in_cache = all_param_names - expected_param_names
+            extra_in_cache = expected_param_names - all_param_names
+            raise RuntimeError(
+                f"[Attacker {self.client_id}] Parameter name mismatch:\n"
+                f"  - Model params: {len(all_param_names)} params\n"
+                f"  - Cache params: {len(expected_param_names)} params\n"
+                f"  - Missing in cache: {missing_in_cache}\n"
+                f"  - Extra in cache: {extra_in_cache}\n"
+                f"  - Base params: {set(self.base_params.keys())}\n"
+                f"  - LoRA params: {self.lora_param_names}"
+            )
         
         self._functional_cache_initialized = True
         print(f"    [Attacker {self.client_id}] Functional cache initialized: "
