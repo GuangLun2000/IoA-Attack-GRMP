@@ -2210,6 +2210,23 @@ class AttackerClient(Client):
             #     self.rho_dt = torch.tensor(self.rho_dt, device=target_device)
             # ==========================================
         
+        # ============================================================
+        # Print initial optimization state
+        # ============================================================
+        if self.d_T is not None:
+            initial_dist_tensor = self._compute_real_distance_to_global(
+                proxy_param,
+                selected_benign,
+                beta_selection
+            )
+            initial_dist = initial_dist_tensor.item()
+            initial_g = initial_dist - self.d_T
+            initial_lambda = self.lambda_dt.item() if isinstance(self.lambda_dt, torch.Tensor) else self.lambda_dt if self.lambda_dt is not None else 0.0
+            initial_loss = self._compute_global_loss(proxy_param, selected_benign, beta_selection).item()
+            print(f"    [Attacker {self.client_id}] Starting optimization: "
+                  f"initial_dist={initial_dist:.4f}, d_T={self.d_T:.4f}, g={initial_g:.4f}, "
+                  f"lambda={initial_lambda:.4f}, loss={initial_loss:.4f}, steps={self.proxy_steps}")
+        
         for step in range(self.proxy_steps):
             # ============================================================
             # CRITICAL: Zero gradients using set_to_none=True for efficiency
@@ -2445,9 +2462,14 @@ class AttackerClient(Client):
                     # OPTIMIZATION 5: Keep multiplier on same device when updating
                     self.lambda_dt = torch.tensor(new_lambda, device=target_device, requires_grad=False)
                 
-                    # Logging for debugging (optional, can be removed or made conditional)
-                    if step % 10 == 0 or step == 0:
-                        print(f"      [Attacker {self.client_id}] Step {step}: dist={current_dist:.4f}, g={g_val:.4f}, lambda={lambda_val:.4f}, loss={global_loss.item():.4f}")
+                    # Logging: Print every step for detailed monitoring
+                    # Print more frequently for better visibility (every step or every 5 steps)
+                    print_freq = 1 if self.proxy_steps <= 20 else 5  # Print every step if <=20 steps, else every 5 steps
+                    if step % print_freq == 0 or step == 0 or step == self.proxy_steps - 1:
+                        grad_norm = proxy_param.grad.norm().item() if proxy_param.grad is not None else 0.0
+                        print(f"      [Attacker {self.client_id}] Step {step}/{self.proxy_steps-1}: "
+                              f"dist={current_dist:.4f}, g={g_val:.4f}, lambda={lambda_val:.4f}, "
+                              f"loss={global_loss.item():.4f}, grad_norm={grad_norm:.4f}")
                 
                 # ===== CONSTRAINT (4c) COMMENTED OUT =====
                 # if self.gamma is not None and len(selected_benign) > 0:
@@ -2493,14 +2515,15 @@ class AttackerClient(Client):
                         scale = self.d_T / (dist + 1e-12)  # Add small epsilon to avoid division by zero
                         proxy_param.mul_(scale)
                         
-                        # Logging for debugging (optional, can be removed or made conditional)
-                        if step % 10 == 0 or step == 0:
-                            new_dist = self._compute_real_distance_to_global(
-                                proxy_param,
-                                selected_benign,
-                                beta_selection
-                            ).item()
-                            print(f"      [Attacker {self.client_id}] Step {step}: Hard projection applied: "
+                        # Logging: Print projection information
+                        new_dist = self._compute_real_distance_to_global(
+                            proxy_param,
+                            selected_benign,
+                            beta_selection
+                        ).item()
+                        print_freq = 1 if self.proxy_steps <= 20 else 5
+                        if step % print_freq == 0 or step == 0 or step == self.proxy_steps - 1:
+                            print(f"      [Attacker {self.client_id}] Step {step}/{self.proxy_steps-1}: Hard projection applied: "
                                   f"dist {dist:.4f} -> {new_dist:.4f} (target: {self.d_T:.4f})")
             elif self.use_lagrangian_dual and self.d_T is not None:
                 # ============================================================
@@ -2527,6 +2550,38 @@ class AttackerClient(Client):
                         # CRITICAL: Use no_grad() + in-place op to avoid breaking gradients
                         with torch.no_grad():
                             proxy_param.mul_(scale_factor)
+                        
+                        # Logging: Print light projection information
+                        print_freq = 1 if self.proxy_steps <= 20 else 5
+                        if step % print_freq == 0 or step == 0 or step == self.proxy_steps - 1:
+                            new_dist_after_proj = self._compute_real_distance_to_global(
+                                proxy_param,
+                                selected_benign,
+                                beta_selection
+                            ).item()
+                            print(f"      [Attacker {self.client_id}] Step {step}/{self.proxy_steps-1}: Light projection applied: "
+                                  f"dist {dist_to_global_for_projection:.4f} -> {new_dist_after_proj:.4f} "
+                                  f"(target: {target_dist:.4f}, violation_ratio={violation_ratio:.2f})")
+        
+        # ============================================================
+        # Print final optimization state
+        # ============================================================
+        if self.d_T is not None:
+            final_dist_tensor = self._compute_real_distance_to_global(
+                proxy_param,
+                selected_benign,
+                beta_selection
+            )
+            final_dist = final_dist_tensor.item()
+            final_g = final_dist - self.d_T
+            final_lambda = self.lambda_dt.item() if isinstance(self.lambda_dt, torch.Tensor) else self.lambda_dt if self.lambda_dt is not None else 0.0
+            final_loss = self._compute_global_loss(proxy_param, selected_benign, beta_selection).item()
+            final_violation = max(0, final_g)
+            violation_pct = (final_violation / self.d_T * 100) if self.d_T > 0 else 0.0
+            print(f"    [Attacker {self.client_id}] Optimization completed: "
+                  f"final_dist={final_dist:.4f}, d_T={self.d_T:.4f}, g={final_g:.4f}, "
+                  f"lambda={final_lambda:.4f}, loss={final_loss:.4f}, "
+                  f"violation={final_violation:.4f} ({violation_pct:.1f}%)")
         
         malicious_update = proxy_param.detach()
         
