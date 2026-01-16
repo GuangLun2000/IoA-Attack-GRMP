@@ -653,7 +653,7 @@ def main():
         # ========== Data Distribution ==========
         'dirichlet_alpha': 0.3,  # Make data less extreme non-IID (higher alpha = more balanced)
         # 'dataset_size_limit': None,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
-        'dataset_size_limit': 10000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
+        'dataset_size_limit': 20000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
         # 'dataset_size_limit': 20000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
 
         # ========== Training Mode Configuration ==========
@@ -694,10 +694,10 @@ def main():
         
         # ========== Attack Optimization Parameters ==========
         'proxy_step': 0.1,  # Step size for gradient-free ascent toward global-loss proxy
-        'proxy_steps': 100,  # Number of optimization steps for attack objective (int)
+        'proxy_steps': 50,  # Number of optimization steps for attack objective (int)
         'gsp_perturbation_scale': 0.05,  # Perturbation scale for GSP attack diversity (float)
         'opt_init_perturbation_scale': 0.02,  # Perturbation scale for optimization initialization (float)
-        'grad_clip_norm': 1.0,  # Gradient clipping norm for training stability (float)
+        'grad_clip_norm': 5.0,  # Gradient clipping norm for training stability (float)
         'attacker_claimed_data_size': None,  # None = use actual assigned data size
 
         # ========== Lagrangian Dual Parameters ==========

@@ -68,36 +68,61 @@ class Server:
             else:
                 client.optimizer = None
 
-    def _compute_similarities(self, updates: List[torch.Tensor]) -> np.ndarray:
+    def _compute_similarities(self, updates: List[torch.Tensor], client_ids: List[int] = None) -> np.ndarray:
         """
-        Compute standard cosine similarities between each update and the mean update.
+        Compute cosine similarities between each update and the weighted average update.
         
-        Standard definition (used in FL defense literature):
-            sim_i = cosine_similarity(w_i, mean(w_1, w_2, ..., w_n))
+        CRITICAL: Uses weighted aggregation (FedAvg style) to match attack optimization distance definition.
         
-        This is the standard cosine similarity metric used in federated learning
-        defense mechanisms (e.g., Krum, Trimmed Mean, Median).
+        Definition (consistent with attack optimization):
+            sim_i = cosine_similarity(Δ_i, Δ_g)
+            where Δ_g = Σ_j (D_j / D_total) * Δ_j (weighted average, FedAvg style)
+        
+        This matches the distance definition used in _compute_distance_update_space:
+            dist = ||Δ_att - Δ_g|| where Δ_g is weighted aggregate
         
         Args:
             updates: List of client update tensors
+            client_ids: List of client IDs (optional, for weighted aggregation)
             
         Returns:
             numpy array of cosine similarities (one per client)
         """
         n_updates = len(updates)
 
-        print("  📊 Computing standard cosine similarities")
+        print("  📊 Computing cosine similarities (weighted aggregation, matches attack optimization)")
 
-        # Compute mean update
-        avg_update = torch.stack(updates).mean(dim=0)
+        # Compute weighted average (FedAvg style) to match attack optimization
+        if client_ids is not None and len(client_ids) == len(updates):
+            # Get data sizes for weighting
+            weights = []
+            for cid in client_ids:
+                client = next((c for c in self.clients if c.client_id == cid), None)
+                if client:
+                    if getattr(client, 'is_attacker', False):
+                        # For attackers, use claimed_data_size
+                        D_i = float(getattr(client, 'claimed_data_size', 1.0))
+                    else:
+                        # For benign clients, use actual data size
+                        D_i = float(len(getattr(client, 'data_indices', [])) or 1.0)
+                else:
+                    D_i = 1.0  # Fallback
+                weights.append(D_i)
+            
+            total_D = sum(weights) + 1e-12
+            weighted_avg = torch.zeros_like(updates[0])
+            for update, w in zip(updates, weights):
+                weighted_avg += (w / total_D) * update
+        else:
+            # Fallback to simple average if client_ids not provided
+            weighted_avg = torch.stack(updates).mean(dim=0)
         
-        # Compute standard cosine similarity for each update
-        # Standard definition: cosine_similarity(w_i, mean(all_updates))
+        # Compute cosine similarity for each update
         similarities = []
         for update in updates:
             sim = torch.cosine_similarity(
                 update.unsqueeze(0),
-                avg_update.unsqueeze(0)
+                weighted_avg.unsqueeze(0)
             ).item()
             similarities.append(sim)
 
@@ -124,34 +149,60 @@ class Server:
 
         return similarities
 
-    def _compute_euclidean_distances(self, updates: List[torch.Tensor]) -> np.ndarray:
+    def _compute_euclidean_distances(self, updates: List[torch.Tensor], client_ids: List[int] = None) -> np.ndarray:
         """
-        Compute standard Euclidean distances between each update and the mean update.
+        Compute Euclidean distances between each update and the weighted average update.
         
-        Standard definition (used in FL defense literature):
-            dist_i = ||w_i - mean(w_1, w_2, ..., w_n)||
+        CRITICAL: Uses weighted aggregation (FedAvg style) to match attack optimization distance definition.
         
-        This is the standard Euclidean distance (L2 norm) metric used in federated
-        learning defense mechanisms (e.g., Multi-Krum, Coordinate-wise Median).
+        Definition (consistent with attack optimization):
+            dist_i = ||Δ_i - Δ_g||
+            where Δ_g = Σ_j (D_j / D_total) * Δ_j (weighted average, FedAvg style)
+        
+        This matches the distance definition used in _compute_distance_update_space:
+            dist = ||Δ_att - Δ_g|| where Δ_g is weighted aggregate
         
         Args:
             updates: List of client update tensors
+            client_ids: List of client IDs (optional, for weighted aggregation)
             
         Returns:
             numpy array of Euclidean distances (one per client)
         """
         n_updates = len(updates)
         
-        print("  📊 Computing Euclidean distances")
+        print("  📊 Computing Euclidean distances (weighted aggregation, matches attack optimization)")
         
-        # Compute mean update
-        avg_update = torch.stack(updates).mean(dim=0)
+        # Compute weighted average (FedAvg style) to match attack optimization
+        if client_ids is not None and len(client_ids) == len(updates):
+            # Get data sizes for weighting
+            weights = []
+            for cid in client_ids:
+                client = next((c for c in self.clients if c.client_id == cid), None)
+                if client:
+                    if getattr(client, 'is_attacker', False):
+                        # For attackers, use claimed_data_size
+                        D_i = float(getattr(client, 'claimed_data_size', 1.0))
+                    else:
+                        # For benign clients, use actual data size
+                        D_i = float(len(getattr(client, 'data_indices', [])) or 1.0)
+                else:
+                    D_i = 1.0  # Fallback
+                weights.append(D_i)
+            
+            total_D = sum(weights) + 1e-12
+            weighted_avg = torch.zeros_like(updates[0])
+            for update, w in zip(updates, weights):
+                weighted_avg += (w / total_D) * update
+        else:
+            # Fallback to simple average if client_ids not provided
+            weighted_avg = torch.stack(updates).mean(dim=0)
         
         # Compute Euclidean distance for each update
         distances = []
         for update in updates:
-            # Euclidean distance: ||update - avg_update||
-            dist = torch.norm(update - avg_update).item()
+            # Euclidean distance: ||update - weighted_avg||
+            dist = torch.norm(update - weighted_avg).item()
             distances.append(dist)
         
         distances = np.array(distances)
@@ -212,8 +263,9 @@ class Server:
             
             # Compute similarity and distance metrics for visualization (even though defense is disabled)
             # This allows observing attack impact through metrics
-            similarities = self._compute_similarities(updates)
-            euclidean_distances = self._compute_euclidean_distances(updates) if len(updates) > 0 else np.array([])
+            # Pass client_ids to ensure weighted aggregation matches attack optimization
+            similarities = self._compute_similarities(updates, client_ids)
+            euclidean_distances = self._compute_euclidean_distances(updates, client_ids) if len(updates) > 0 else np.array([])
             
             defense_log = {
                 'similarities': similarities.tolist(),
@@ -265,8 +317,9 @@ class Server:
             
             # Compute similarity and distance metrics for visualization (even when no attackers)
             # This provides baseline metrics for comparison
-            similarities = self._compute_similarities(updates)
-            euclidean_distances = self._compute_euclidean_distances(updates) if len(updates) > 0 else np.array([])
+            # Pass client_ids to ensure weighted aggregation matches attack optimization
+            similarities = self._compute_similarities(updates, client_ids)
+            euclidean_distances = self._compute_euclidean_distances(updates, client_ids) if len(updates) > 0 else np.array([])
             defense_log = {
                 'similarities': similarities.tolist(),
                 'euclidean_distances': euclidean_distances.tolist() if len(euclidean_distances) > 0 else [],
@@ -289,8 +342,9 @@ class Server:
         Aggregate updates - Enhanced stability version.
         Uses a more lenient defense mechanism and smooth update strategy.
         """
-        similarities = self._compute_similarities(updates)
-        euclidean_distances = self._compute_euclidean_distances(updates)
+        # Pass client_ids to ensure weighted aggregation matches attack optimization
+        similarities = self._compute_similarities(updates, client_ids)
+        euclidean_distances = self._compute_euclidean_distances(updates, client_ids)
 
         # Compute dynamic threshold (more lenient)
         mean_sim = similarities.mean()
