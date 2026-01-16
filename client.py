@@ -1025,7 +1025,7 @@ class AttackerClient(Client):
             if use_lora:
                 raise RuntimeError(msg)
             print(msg)
-        return torch.tensor(0.0, device=self.device)
+            return torch.tensor(0.0, device=self.device)
 
         # Move model to GPU temporarily for proxy loss calculation
         # Normalize device: always use 'cuda:0' for consistency
@@ -1651,7 +1651,7 @@ class AttackerClient(Client):
         if self.total_data_size is None or len(self.benign_data_sizes) == 0:
             # Fallback: use proxy loss only (old behavior)
             proxy_loss = self._proxy_global_loss(malicious_update, max_batches=self.proxy_max_batches_opt, skip_dim_check=False)
-        return proxy_loss
+            return proxy_loss
         
         # Paper Formula (3): Full calculation with weights
         total_loss = torch.tensor(0.0, device=self.device, requires_grad=True)
@@ -1860,7 +1860,7 @@ class AttackerClient(Client):
         except Exception as e:
             # Fallback if SVD fails: return zeros in reduced dimension
             print(f"    [Attacker {self.client_id}] SVD failed: {e}, using zero fallback")
-        return torch.zeros(M, device=feature_matrix.device, dtype=feature_matrix.dtype)
+            return torch.zeros(M, device=feature_matrix.device, dtype=feature_matrix.dtype)
         
         # Step 3: Compute GFT coefficient matrix
         # S = F · B where F ∈ R^{I×M}, B ∈ R^{M×M}
@@ -1878,7 +1878,7 @@ class AttackerClient(Client):
         except Exception as e:
             # Fallback if SVD fails: return zeros in reduced dimension
             print(f"    [Attacker {self.client_id}] SVD of recon failed: {e}, using zero fallback")
-        return torch.zeros(M, device=feature_matrix.device, dtype=feature_matrix.dtype)
+            return torch.zeros(M, device=feature_matrix.device, dtype=feature_matrix.dtype)
         
         # Step 6: Generate reconstructed feature matrix
         # F̂ = S · B̂^T where S ∈ R^{I×M}, B̂ ∈ R^{M×M}
@@ -1895,7 +1895,7 @@ class AttackerClient(Client):
         if F_recon_rows == 0:
             # Empty feature matrix: return zeros
             print(f"    [Attacker {self.client_id}] F_recon is empty, using zero fallback")
-        return torch.zeros(M, device=feature_matrix.device, dtype=feature_matrix.dtype)
+            return torch.zeros(M, device=feature_matrix.device, dtype=feature_matrix.dtype)
         
         # Select a vector from F̂ as the malicious update
         # Use client_id to select different vectors for different attackers (for diversity)
@@ -1967,7 +1967,7 @@ class AttackerClient(Client):
         """
         if not self.benign_updates:
             print(f"    [Attacker {self.client_id}] No benign updates, return zero update")
-        return poisoned_update  # poisoned_update is always zero (attackers don't train)
+            return poisoned_update  # poisoned_update is always zero (attackers don't train)
 
         # Reset feature indices for this session
         self.feature_indices = None
@@ -1978,7 +1978,7 @@ class AttackerClient(Client):
         selected_benign = self._select_benign_subset()
         if not selected_benign:
             print(f"    [Attacker {self.client_id}] No benign subset selected, return zero update")
-        return poisoned_update  # poisoned_update is always zero (attackers don't train)
+            return poisoned_update  # poisoned_update is always zero (attackers don't train)
 
         # Move selected updates to GPU for processing
         selected_benign_gpu = [u.to(self.device) for u in selected_benign]
@@ -2113,20 +2113,33 @@ class AttackerClient(Client):
         # CRITICAL: Hard preconditions check before optimization
         # LoRA mode requires strict gradient validation, so we must ensure prerequisites
         if self.global_model_params is None or self.proxy_loader is None:
-            raise RuntimeError(
-                f"[Attacker {self.client_id}] Missing global_model_params or proxy_loader before optimization. "
+            error_msg = (
+                f"[Attacker {self.client_id}] Missing prerequisites before optimization:\n"
+                f"  - global_model_params: {self.global_model_params is None}\n"
+                f"  - proxy_loader: {self.proxy_loader is None}\n"
                 f"Cannot proceed with LoRA gradient validation requirements."
             )
+            print(f"    {error_msg}")
+            raise RuntimeError(error_msg)
         
         # Verify global_model_params dimension matches _flat_numel (LoRA mode requirement)
         use_lora = hasattr(self.model, 'use_lora') and self.model.use_lora
         if use_lora:
-            if self.global_model_params.numel() != self._flat_numel:
-                raise RuntimeError(
-                    f"[Attacker {self.client_id}] LoRA mode: global_model_params dimension mismatch: "
-                    f"got {self.global_model_params.numel()}, expected {self._flat_numel}. "
+            global_numel = self.global_model_params.numel()
+            if global_numel != self._flat_numel:
+                error_msg = (
+                    f"[Attacker {self.client_id}] LoRA mode: global_model_params dimension mismatch:\n"
+                    f"  - global_model_params.numel(): {global_numel}\n"
+                    f"  - _flat_numel: {self._flat_numel}\n"
+                    f"  - model.use_lora: {use_lora}\n"
+                    f"  - model.get_flat_params().numel(): {self.model.get_flat_params().numel()}\n"
                     f"Check set_global_model_params() conversion."
                 )
+                print(f"    {error_msg}")
+                raise RuntimeError(error_msg)
+            else:
+                print(f"    [Attacker {self.client_id}] LoRA dimension check passed: "
+                      f"global_params={global_numel}, _flat_numel={self._flat_numel}")
         proxy_lr = self.proxy_step
         # Add small client-specific perturbation to initial malicious_update to ensure diversity
         # This helps different attackers converge to different local optima
@@ -2213,19 +2226,29 @@ class AttackerClient(Client):
         # ============================================================
         # Print initial optimization state
         # ============================================================
+        print(f"    [Attacker {self.client_id}] Preparing optimization: "
+              f"proxy_param.shape={proxy_param.shape}, proxy_param.numel()={proxy_param.numel()}, "
+              f"_flat_numel={self._flat_numel}, use_lora={use_lora}")
+        
         if self.d_T is not None:
-            initial_dist_tensor = self._compute_real_distance_to_global(
-                proxy_param,
-                selected_benign,
-                beta_selection
-            )
-            initial_dist = initial_dist_tensor.item()
-            initial_g = initial_dist - self.d_T
-            initial_lambda = self.lambda_dt.item() if isinstance(self.lambda_dt, torch.Tensor) else self.lambda_dt if self.lambda_dt is not None else 0.0
-            initial_loss = self._compute_global_loss(proxy_param, selected_benign, beta_selection).item()
-            print(f"    [Attacker {self.client_id}] Starting optimization: "
-                  f"initial_dist={initial_dist:.4f}, d_T={self.d_T:.4f}, g={initial_g:.4f}, "
-                  f"lambda={initial_lambda:.4f}, loss={initial_loss:.4f}, steps={self.proxy_steps}")
+            try:
+                initial_dist_tensor = self._compute_real_distance_to_global(
+                    proxy_param,
+                    selected_benign,
+                    beta_selection
+                )
+                initial_dist = initial_dist_tensor.item()
+                initial_g = initial_dist - self.d_T
+                initial_lambda = self.lambda_dt.item() if isinstance(self.lambda_dt, torch.Tensor) else self.lambda_dt if self.lambda_dt is not None else 0.0
+                initial_loss = self._compute_global_loss(proxy_param, selected_benign, beta_selection).item()
+                print(f"    [Attacker {self.client_id}] Starting optimization: "
+                      f"initial_dist={initial_dist:.4f}, d_T={self.d_T:.4f}, g={initial_g:.4f}, "
+                      f"lambda={initial_lambda:.4f}, loss={initial_loss:.4f}, steps={self.proxy_steps}")
+            except Exception as e:
+                print(f"    [Attacker {self.client_id}] ERROR computing initial state: {e}")
+                import traceback
+                traceback.print_exc()
+                raise
         
         for step in range(self.proxy_steps):
             # ============================================================
@@ -2510,7 +2533,7 @@ class AttackerClient(Client):
                     )
                     dist = dist_tensor.item()
                     if dist > self.d_T:
-                        # Project to constraint set: scale down to satisfy d ≤ d_T
+                    # Project to constraint set: scale down to satisfy d ≤ d_T
                         # CRITICAL: Use no_grad() + in-place op to avoid breaking gradients
                         scale = self.d_T / (dist + 1e-12)  # Add small epsilon to avoid division by zero
                         proxy_param.mul_(scale)
