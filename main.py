@@ -677,7 +677,7 @@ def main():
         
         # ========== Formula 4 Constraint Parameters ==========
         'd_T': 2.0,  # Base distance threshold for constraint (4b): d(w'_j(t), w'_g(t)) ≤ d_T
-        'adaptive_d_T': False,  # Whether to use adaptive d_T based on benign client distances (bool)
+        'adaptive_d_T': True,  # Whether to use adaptive d_T based on benign client distances (bool)
         'd_T_multiplier': 1.5,  # Multiplier for adaptive d_T: d_T = max(base_d_T, mean(benign_distances) * multiplier) (float)
         'd_T_min': 1.0,  # Minimum d_T value (prevents too small thresholds) (float)
         # ===== CONSTRAINT (4c) COMMENTED OUT =====
@@ -699,10 +699,10 @@ def main():
         'vgae_dropout': 0.0,  # VGAE dropout rate (float, 0.0-1.0)
         
         # ========== Attack Optimization Parameters ==========
-        'proxy_step': 0.01,  # Step size for gradient-free ascent toward global-loss proxy
-        'proxy_steps': 50,  # Number of optimization steps for attack objective (int)
-        'gsp_perturbation_scale': 0.03,  # Perturbation scale for GSP attack diversity (float)
-        'opt_init_perturbation_scale': 0.02,  # Perturbation scale for optimization initialization (float)
+        'proxy_step': 0.1,  # Step size for gradient-free ascent toward global-loss proxy
+        'proxy_steps': 100,  # Number of optimization steps for attack objective (int)
+        'gsp_perturbation_scale': 0.01,  # Perturbation scale for GSP attack diversity (float)
+        'opt_init_perturbation_scale': 0.01,  # Perturbation scale for optimization initialization (float)
         'grad_clip_norm': 1.0,  # Gradient clipping norm for training stability (float)
         'attacker_claimed_data_size': None,  # None = use actual assigned data size
 
