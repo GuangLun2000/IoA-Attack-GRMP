@@ -673,7 +673,7 @@ def main():
         'attack_start_round': 0,  # Round when attack phase starts (int, now all rounds use complete poisoning)
         
         # ========== Formula 4 Constraint Parameters ==========
-        'd_T': 5.0,  # Distance threshold for constraint (4b): d(w'_j(t), w'_g(t)) ≤ d_T
+        'd_T': 10.0,  # Distance threshold for constraint (4b): d(w'_j(t), w'_g(t)) ≤ d_T (increased from 5.0, benign avg ~6.3)
         # ===== CONSTRAINT (4c) COMMENTED OUT =====
         # 'gamma': 5.0,  # Upper bound for constraint (4c): Σ β'_{i,j}(t) d(w_i(t), w̄_i(t)) ≤ Γ
         'gamma': None,  # Temporarily disabled (constraint 4c is commented out)
@@ -707,7 +707,7 @@ def main():
         
         # Lagrangian multiplier parameters
         'lambda_init': 100,  # Initial λ(t) value for constraint (4b): d(w'_j, w'_g) ≤ d_T
-        'lambda_lr': 1.0,    # Learning rate for λ(t) update (dual ascent step size)
+        'lambda_lr': 0.5,    # Learning rate for λ(t) update (dual ascent step size)
         
         # Constraint (4c) parameters - DISABLED
         # 'rho_init': 0.1,   # Initial ρ(t) value (constraint 4c commented out in code)
