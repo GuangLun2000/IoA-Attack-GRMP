@@ -1111,8 +1111,8 @@ class AttackerClient(Client):
             # For full fine-tuning mode, prepare param_dict (LoRA mode doesn't need this)
             param_dict = {}
             if not use_lora:
-            # Skip dimension check if already validated (performance optimization)
-            param_dict = self._flat_to_param_dict(candidate_params, skip_dim_check=skip_dim_check)
+                # Skip dimension check if already validated (performance optimization)
+                param_dict = self._flat_to_param_dict(candidate_params, skip_dim_check=skip_dim_check)
 
             # CRITICAL FIX: Ensure all parameters in param_dict are on the correct device
             # Normalize device: always use 'cuda:0' for consistency  
@@ -1569,7 +1569,7 @@ class AttackerClient(Client):
                     f"expected {self._flat_numel}, got {self.global_model_params.numel()}"
         else:
             # Non-LoRA mode: Use as-is
-        self.global_model_params = global_params.clone().detach().to(self.device)
+            self.global_model_params = global_params.clone().detach().to(self.device)
     
     def set_constraint_params(self, d_T: float = None, gamma: float = None, 
                               total_data_size: float = None, benign_data_sizes: dict = None):
@@ -2290,14 +2290,14 @@ class AttackerClient(Client):
                     )
                     benign_avg = torch.zeros_like(benign_updates_gpu[0])
                     for idx, benign_update in enumerate(benign_updates_gpu):
-                    if idx < len(self.benign_update_client_ids):
+                        if idx < len(self.benign_update_client_ids):
                             cid = self.benign_update_client_ids[idx]
                             D_i = float(self.benign_data_sizes.get(cid, 1.0))
                             weight = D_i / (total_benign_D + 1e-12)
                             benign_avg += weight * benign_update
                     else:
-                    # Fallback to simple average
-                    benign_avg = torch.stack(benign_updates_gpu).mean(dim=0)
+                        # Fallback to simple average
+                        benign_avg = torch.stack(benign_updates_gpu).mean(dim=0)
                 
                 # Compute distance of each benign update to the average
                 for benign_update in benign_updates_gpu:
@@ -2320,7 +2320,7 @@ class AttackerClient(Client):
                     # Update d_T (preserve type: tensor or float)
                     if isinstance(self.d_T, torch.Tensor):
                         self.d_T = torch.tensor(adaptive_d_T_value, device=self.d_T.device, dtype=self.d_T.dtype)
-                else:
+                    else:
                         self.d_T = adaptive_d_T_value
                     
                     print(f"    [Attacker {self.client_id}] Adaptive d_T: base={self.base_d_T:.2f}, "
@@ -2732,29 +2732,29 @@ class AttackerClient(Client):
                 )
                 dist_to_global_for_projection = dist_to_global_for_projection_tensor.item()
                 
-                    d_T_val = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T
-                    violation_ratio = (dist_to_global_for_projection - d_T_val) / d_T_val if d_T_val > 0 else 0.0
-                    
-                    if violation_ratio > 1:
-                        # Light projection to 1.5 × d_T, leaving margin to allow Lagrangian to continue optimizing
-                        d_T_proj = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T
-                        target_dist = d_T_proj * 1.5
+                d_T_val = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T
+                violation_ratio = (dist_to_global_for_projection - d_T_val) / d_T_val if d_T_val > 0 else 0.0
+                
+                if violation_ratio > 1:
+                    # Light projection to 1.5 × d_T, leaving margin to allow Lagrangian to continue optimizing
+                    d_T_proj = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T
+                    target_dist = d_T_proj * 1.5
                     scale_factor = target_dist / dist_to_global_for_projection
-                        # CRITICAL: Use no_grad() + in-place op to avoid breaking gradients
-                        with torch.no_grad():
-                            proxy_param.mul_(scale_factor)
-                        
-                        # Logging: Print light projection information
-                        print_freq = 1 if self.proxy_steps <= 20 else 5
-                        if step % print_freq == 0 or step == 0 or step == self.proxy_steps - 1:
-                            new_dist_after_proj_tensor, _ = self._compute_distance_update_space(
-                                proxy_param,
-                                self.benign_updates
-                            )
-                            new_dist_after_proj = new_dist_after_proj_tensor.item()
-                            print(f"      [Attacker {self.client_id}] Step {step}/{self.proxy_steps-1}: Light projection applied: "
-                                  f"dist {dist_to_global_for_projection:.4f} -> {new_dist_after_proj:.4f} "
-                                  f"(target: {target_dist:.4f}, violation_ratio={violation_ratio:.2f})")
+                    # CRITICAL: Use no_grad() + in-place op to avoid breaking gradients
+                    with torch.no_grad():
+                        proxy_param.mul_(scale_factor)
+                    
+                    # Logging: Print light projection information
+                    print_freq = 1 if self.proxy_steps <= 20 else 5
+                    if step % print_freq == 0 or step == 0 or step == self.proxy_steps - 1:
+                        new_dist_after_proj_tensor, _ = self._compute_distance_update_space(
+                            proxy_param,
+                            self.benign_updates
+                        )
+                        new_dist_after_proj = new_dist_after_proj_tensor.item()
+                        print(f"      [Attacker {self.client_id}] Step {step}/{self.proxy_steps-1}: Light projection applied: "
+                              f"dist {dist_to_global_for_projection:.4f} -> {new_dist_after_proj:.4f} "
+                              f"(target: {target_dist:.4f}, violation_ratio={violation_ratio:.2f})")
         
         # ============================================================
         # Print final optimization state
