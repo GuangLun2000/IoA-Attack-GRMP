@@ -712,7 +712,7 @@ def main():
         'enable_final_projection': False,  # Whether to apply final projection after optimization (bool, True/False)
         
         # Lagrangian multiplier parameters
-        'lambda_init': 3000,  # Initial λ(t) value for constraint (4b): d(w'_j, w'_g) ≤ d_T
+        'lambda_init': 5000,  # Initial λ(t) value for constraint (4b): d(w'_j, w'_g) ≤ d_T
         'lambda_lr': 1.0,    # Learning rate for λ(t) update (dual ascent step size)
         
         # Constraint (4c) parameters - DISABLED
