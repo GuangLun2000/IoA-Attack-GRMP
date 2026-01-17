@@ -224,7 +224,8 @@ def setup_experiment(config):
                 proxy_steps=config['proxy_steps'],
                 gsp_perturbation_scale=config['gsp_perturbation_scale'],
                 opt_init_perturbation_scale=config['opt_init_perturbation_scale'],
-                grad_clip_norm=config['grad_clip_norm']
+                grad_clip_norm=config['grad_clip_norm'],
+                early_stop_constraint_stability_steps=config.get('early_stop_constraint_stability_steps', 3)
             )
             
             # Set Lagrangian Dual parameters (if using)
@@ -700,11 +701,12 @@ def main():
         
         # ========== Attack Optimization Parameters ==========
         'proxy_step': 0.01,  # Step size for gradient-free ascent toward global-loss proxy
-        'proxy_steps': 100,  # Number of optimization steps for attack objective (int)
+        'proxy_steps': 150,  # Number of optimization steps for attack objective (int)
         'gsp_perturbation_scale': 0.01,  # Perturbation scale for GSP attack diversity (float)
         'opt_init_perturbation_scale': 0.01,  # Perturbation scale for optimization initialization (float)
         'grad_clip_norm': 1.0,  # Gradient clipping norm for training stability (float)
         'attacker_claimed_data_size': None,  # None = use actual assigned data size
+        'early_stop_constraint_stability_steps': 1,  # Early stopping: stop after N consecutive steps satisfying constraint (int)
 
         # ========== Lagrangian Dual Parameters ==========
         'use_lagrangian_dual': True,  # Whether to use Lagrangian Dual mechanism (bool, True/False)

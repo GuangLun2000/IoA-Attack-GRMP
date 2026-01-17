@@ -246,7 +246,8 @@ class AttackerClient(Client):
                  proxy_steps=20,
                  gsp_perturbation_scale=0.01,
                  opt_init_perturbation_scale=0.001,
-                 grad_clip_norm=1.0):
+                 grad_clip_norm=1.0,
+                 early_stop_constraint_stability_steps=3):
         """
         Initialize an attacker client with VGAE-based camouflage capabilities.
         
@@ -298,6 +299,7 @@ class AttackerClient(Client):
         self.gsp_perturbation_scale = gsp_perturbation_scale
         self.opt_init_perturbation_scale = opt_init_perturbation_scale
         self.grad_clip_norm = grad_clip_norm
+        self.early_stop_constraint_stability_steps = early_stop_constraint_stability_steps
 
         dummy_loader = data_manager.get_empty_loader()
         super().__init__(client_id, model, dummy_loader, lr, local_epochs, alpha)
@@ -411,7 +413,7 @@ class AttackerClient(Client):
         # Store base d_T if adaptive d_T is enabled (needed for adaptive calculation)
         if self.adaptive_d_T and self.base_d_T is None:
             self.base_d_T = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T if self.d_T is not None else 10.0
-        
+
         # Modification 1: Reset Lagrangian multipliers (with adaptive initialization based on history)
         # Reason: Prevent λ and ρ from accumulating across rounds, which causes numerical instability and optimization imbalance
         # Optimization: Use adaptive λ initialization based on previous round's violation to provide better starting point
@@ -577,7 +579,7 @@ class AttackerClient(Client):
         # return selected
         # ====================================================================
         # Since constraint (4c) is disabled, always return all benign updates
-        return self.benign_updates
+            return self.benign_updates
     
     def _get_selected_benign_indices(self) -> List[int]:
         """
@@ -654,7 +656,7 @@ class AttackerClient(Client):
         # return sorted(selected_indices)
         # =====================================================================
         # Since constraint (4c) is disabled, always return all indices
-        return list(range(len(self.benign_updates)))
+            return list(range(len(self.benign_updates)))
 
     def local_train(self, epochs=None) -> torch.Tensor:
         """
@@ -1109,8 +1111,8 @@ class AttackerClient(Client):
             # For full fine-tuning mode, prepare param_dict (LoRA mode doesn't need this)
             param_dict = {}
             if not use_lora:
-                # Skip dimension check if already validated (performance optimization)
-                param_dict = self._flat_to_param_dict(candidate_params, skip_dim_check=skip_dim_check)
+            # Skip dimension check if already validated (performance optimization)
+            param_dict = self._flat_to_param_dict(candidate_params, skip_dim_check=skip_dim_check)
 
             # CRITICAL FIX: Ensure all parameters in param_dict are on the correct device
             # Normalize device: always use 'cuda:0' for consistency  
@@ -1567,7 +1569,7 @@ class AttackerClient(Client):
                     f"expected {self._flat_numel}, got {self.global_model_params.numel()}"
         else:
             # Non-LoRA mode: Use as-is
-            self.global_model_params = global_params.clone().detach().to(self.device)
+        self.global_model_params = global_params.clone().detach().to(self.device)
     
     def set_constraint_params(self, d_T: float = None, gamma: float = None, 
                               total_data_size: float = None, benign_data_sizes: dict = None):
@@ -2288,12 +2290,12 @@ class AttackerClient(Client):
                     )
                     benign_avg = torch.zeros_like(benign_updates_gpu[0])
                     for idx, benign_update in enumerate(benign_updates_gpu):
-                        if idx < len(self.benign_update_client_ids):
+                    if idx < len(self.benign_update_client_ids):
                             cid = self.benign_update_client_ids[idx]
                             D_i = float(self.benign_data_sizes.get(cid, 1.0))
                             weight = D_i / (total_benign_D + 1e-12)
                             benign_avg += weight * benign_update
-                else:
+                    else:
                     # Fallback to simple average
                     benign_avg = torch.stack(benign_updates_gpu).mean(dim=0)
                 
@@ -2318,7 +2320,7 @@ class AttackerClient(Client):
                     # Update d_T (preserve type: tensor or float)
                     if isinstance(self.d_T, torch.Tensor):
                         self.d_T = torch.tensor(adaptive_d_T_value, device=self.d_T.device, dtype=self.d_T.dtype)
-                    else:
+                else:
                         self.d_T = adaptive_d_T_value
                     
                     print(f"    [Attacker {self.client_id}] Adaptive d_T: base={self.base_d_T:.2f}, "
@@ -2392,6 +2394,11 @@ class AttackerClient(Client):
                 import traceback
                 traceback.print_exc()
                 raise
+        
+        # Early stopping variables: track constraint satisfaction stability
+        constraint_satisfied_steps = 0
+        constraint_stability_steps = self.early_stop_constraint_stability_steps  # Stop after N consecutive steps satisfying constraint
+        prev_dist_val = None
         
         for step in range(self.proxy_steps):
             # ============================================================
@@ -2530,7 +2537,7 @@ class AttackerClient(Client):
                 d_T_val = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T if self.d_T is not None else None
                 if d_T_val is not None:
                     dist_to_global, _ = self._compute_distance_update_space(
-                        proxy_param,
+                    proxy_param,
                         self.benign_updates
                     )
                     constraint_b_violation = F.relu(dist_to_global - d_T_val)
@@ -2621,7 +2628,7 @@ class AttackerClient(Client):
                 if self.d_T is not None:
                 # Calculate distance in UPDATE space after step()
                     current_dist_tensor, _ = self._compute_distance_update_space(
-                    proxy_param,
+                        proxy_param,
                     self.benign_updates
                     )
                     current_dist = current_dist_tensor.item()
@@ -2646,6 +2653,23 @@ class AttackerClient(Client):
                         print(f"      [Attacker {self.client_id}] Step {step}/{self.proxy_steps-1}: "
                         f"dist={current_dist:.4f}, g={g_val:.4f}, lambda={lambda_val:.4f}, "
                         f"loss={global_loss.item():.4f}, grad_norm={grad_norm:.4f}")
+                    
+                    # ============================================================
+                    # Early stopping: Stop when constraint is satisfied and stable
+                    # ============================================================
+                    # Strategy: Stop after N consecutive steps satisfying constraint
+                    # This prevents premature stopping due to temporary fluctuations
+                    # and avoids violating constraint after satisfying it (e.g., Attacker 8)
+                    if current_dist <= d_T_val:
+                        constraint_satisfied_steps += 1
+                        if constraint_satisfied_steps >= constraint_stability_steps:
+                            print(f"    [Attacker {self.client_id}] Early stopping: dist={current_dist:.4f} <= d_T={d_T_val:.4f} "
+                                  f"for {constraint_satisfied_steps} consecutive steps (step {step}/{self.proxy_steps-1})")
+                            break
+                    else:
+                        constraint_satisfied_steps = 0  # Reset counter when constraint is violated
+                    
+                    prev_dist_val = current_dist
                 
                     # ===== CONSTRAINT (4c) COMMENTED OUT =====
                     # if self.gamma is not None and len(self.benign_updates) > 0:
@@ -2703,11 +2727,11 @@ class AttackerClient(Client):
                 # ============================================================
                 if self.enable_light_projection_in_loop:
                     dist_to_global_for_projection_tensor, _ = self._compute_distance_update_space(
-                        proxy_param,
+                    proxy_param,
                         self.benign_updates
-                    )
-                    dist_to_global_for_projection = dist_to_global_for_projection_tensor.item()
-                    
+                )
+                dist_to_global_for_projection = dist_to_global_for_projection_tensor.item()
+                
                     d_T_val = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T
                     violation_ratio = (dist_to_global_for_projection - d_T_val) / d_T_val if d_T_val > 0 else 0.0
                     
@@ -2715,7 +2739,7 @@ class AttackerClient(Client):
                         # Light projection to 1.5 × d_T, leaving margin to allow Lagrangian to continue optimizing
                         d_T_proj = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T
                         target_dist = d_T_proj * 1.5
-                        scale_factor = target_dist / dist_to_global_for_projection
+                    scale_factor = target_dist / dist_to_global_for_projection
                         # CRITICAL: Use no_grad() + in-place op to avoid breaking gradients
                         with torch.no_grad():
                             proxy_param.mul_(scale_factor)
