@@ -638,8 +638,8 @@ def main():
         'seed': 42,  # Random seed for reproducibility (int), 42 is the default
         
         # ========== Federated Learning Setup ==========
-        'num_clients': 7,  # Total number of federated learning clients (int)
-        'num_attackers': 2,  # Number of attacker clients (int, must be < num_clients)
+        'num_clients': 10,  # Total number of federated learning clients (int)
+        'num_attackers': 3,  # Number of attacker clients (int, must be < num_clients)
         'num_benign_clients': None,  # Optional: Explicit number of benign clients for baseline experiment
                                     # If None, baseline will use (num_clients - num_attackers) to ensure fair comparison
                                     # If set, baseline experiment will use exactly this many benign clients
@@ -676,7 +676,7 @@ def main():
         'attack_start_round': 0,  # Round when attack phase starts (int, now all rounds use complete poisoning)
         
         # ========== Formula 4 Constraint Parameters ==========
-        'd_T': 1.0,  # Base distance threshold for constraint (4b): d(w'_j(t), w'_g(t)) ≤ d_T
+        'd_T': 5.0,  # Base distance threshold for constraint (4b): d(w'_j(t), w'_g(t)) ≤ d_T
         'adaptive_d_T': False,  # Whether to use adaptive d_T based on benign client distances (bool)
         'd_T_multiplier': 1.5,  # Multiplier for adaptive d_T: d_T = max(base_d_T, mean(benign_distances) * multiplier) (float)
         'd_T_min': 1.0,  # Minimum d_T value (prevents too small thresholds) (float)
@@ -712,8 +712,8 @@ def main():
         'enable_final_projection': False,  # Whether to apply final projection after optimization (bool, True/False)
         
         # Lagrangian multiplier parameters
-        'lambda_init': 5000,  # Initial λ(t) value for constraint (4b): d(w'_j, w'_g) ≤ d_T
-        'lambda_lr': 1.0,    # Learning rate for λ(t) update (dual ascent step size)
+        'lambda_init': 1000,  # Initial λ(t) value for constraint (4b): d(w'_j, w'_g) ≤ d_T
+        'lambda_lr': 0.1,    # Learning rate for λ(t) update (dual ascent step size)
         
         # Constraint (4c) parameters - DISABLED
         # 'rho_init': 0.1,   # Initial ρ(t) value (constraint 4c commented out in code)
