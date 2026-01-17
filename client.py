@@ -2727,34 +2727,34 @@ class AttackerClient(Client):
                 # ============================================================
                 if self.enable_light_projection_in_loop:
                     dist_to_global_for_projection_tensor, _ = self._compute_distance_update_space(
-                    proxy_param,
+                        proxy_param,
                         self.benign_updates
-                )
-                dist_to_global_for_projection = dist_to_global_for_projection_tensor.item()
-                
-                d_T_val = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T
-                violation_ratio = (dist_to_global_for_projection - d_T_val) / d_T_val if d_T_val > 0 else 0.0
-                
-                if violation_ratio > 1:
-                    # Light projection to 1.5 × d_T, leaving margin to allow Lagrangian to continue optimizing
-                    d_T_proj = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T
-                    target_dist = d_T_proj * 1.5
-                    scale_factor = target_dist / dist_to_global_for_projection
-                    # CRITICAL: Use no_grad() + in-place op to avoid breaking gradients
-                    with torch.no_grad():
-                        proxy_param.mul_(scale_factor)
+                    )
+                    dist_to_global_for_projection = dist_to_global_for_projection_tensor.item()
                     
-                    # Logging: Print light projection information
-                    print_freq = 1 if self.proxy_steps <= 20 else 5
-                    if step % print_freq == 0 or step == 0 or step == self.proxy_steps - 1:
-                        new_dist_after_proj_tensor, _ = self._compute_distance_update_space(
-                            proxy_param,
-                            self.benign_updates
-                        )
-                        new_dist_after_proj = new_dist_after_proj_tensor.item()
-                        print(f"      [Attacker {self.client_id}] Step {step}/{self.proxy_steps-1}: Light projection applied: "
-                              f"dist {dist_to_global_for_projection:.4f} -> {new_dist_after_proj:.4f} "
-                              f"(target: {target_dist:.4f}, violation_ratio={violation_ratio:.2f})")
+                    d_T_val = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T
+                    violation_ratio = (dist_to_global_for_projection - d_T_val) / d_T_val if d_T_val > 0 else 0.0
+                    
+                    if violation_ratio > 1:
+                        # Light projection to 1.5 × d_T, leaving margin to allow Lagrangian to continue optimizing
+                        d_T_proj = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T
+                        target_dist = d_T_proj * 1.5
+                        scale_factor = target_dist / dist_to_global_for_projection
+                        # CRITICAL: Use no_grad() + in-place op to avoid breaking gradients
+                        with torch.no_grad():
+                            proxy_param.mul_(scale_factor)
+                        
+                        # Logging: Print light projection information
+                        print_freq = 1 if self.proxy_steps <= 20 else 5
+                        if step % print_freq == 0 or step == 0 or step == self.proxy_steps - 1:
+                            new_dist_after_proj_tensor, _ = self._compute_distance_update_space(
+                                proxy_param,
+                                self.benign_updates
+                            )
+                            new_dist_after_proj = new_dist_after_proj_tensor.item()
+                            print(f"      [Attacker {self.client_id}] Step {step}/{self.proxy_steps-1}: Light projection applied: "
+                                  f"dist {dist_to_global_for_projection:.4f} -> {new_dist_after_proj:.4f} "
+                                  f"(target: {target_dist:.4f}, violation_ratio={violation_ratio:.2f})")
         
         # ============================================================
         # Print final optimization state
