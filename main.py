@@ -694,11 +694,11 @@ def main():
         'vgae_dropout': 0.0,  # VGAE dropout rate (float, 0.0-1.0)
         
         # ========== Attack Optimization Parameters ==========
-        'proxy_step': 0.01,  # Step size for gradient-free ascent toward global-loss proxy
-        'proxy_steps': 200,  # Number of optimization steps for attack objective (int)
+        'proxy_step': 0.02,  # Step size for gradient-free ascent toward global-loss proxy
+        'proxy_steps': 150,  # Number of optimization steps for attack objective (int)
         'gsp_perturbation_scale': 0.01,  # Perturbation scale for GSP attack diversity (float)
         'opt_init_perturbation_scale': 0.01,  # Perturbation scale for optimization initialization (float)
-        'grad_clip_norm': 1.0,  # Gradient clipping norm for training stability (float)
+        'grad_clip_norm': 2.0,  # Gradient clipping norm for training stability (float)
         'attacker_claimed_data_size': None,  # None = use actual assigned data size
         'early_stop_constraint_stability_steps': 1,  # Early stopping: stop after N consecutive steps satisfying constraint (int)
 
@@ -708,7 +708,7 @@ def main():
         'enable_final_projection': False,  # Whether to apply final projection after optimization (bool, True/False)
         
         # Lagrangian multiplier parameters
-        'lambda_init': 5000,  # Initial λ(t) value for constraint (4b): d(w'_j, w'_g) ≤ d_T
+        'lambda_init': 1000,  # Initial λ(t) value for constraint (4b): d(w'_j, w'_g) ≤ d_T
         'lambda_lr': 1.0,    # Learning rate for λ(t) update (dual ascent step size)
         # Constraint (4c) parameters - DISABLED
         # 'rho_init': 0.1,   # Initial ρ(t) value (constraint 4c commented out in code)

@@ -29,6 +29,7 @@ class Server:
             self.device = torch.device('cpu')
         self.global_model.to(self.device)
         self.clients = []
+        self.client_dict = {}  # client_id -> client mapping for O(1) lookup
         self.log_data = []
 
         # Additional stability parameters
@@ -53,6 +54,8 @@ class Server:
     def register_client(self, client):
         """Register a client to the server."""
         self.clients.append(client)
+        # Update client_id -> client mapping for O(1) lookup
+        self.client_dict[client.client_id] = client
 
     def broadcast_model(self):
         """Broadcast the global model to all clients."""
@@ -67,6 +70,43 @@ class Server:
                 client.reset_optimizer()
             else:
                 client.optimizer = None
+
+    def _compute_weighted_average(self, updates: List[torch.Tensor], client_ids: List[int] = None) -> Tuple[torch.Tensor, List[float]]:
+        """
+        Compute weighted average update (FedAvg style) shared by similarity and distance calculations.
+        
+        Args:
+            updates: List of client update tensors
+            client_ids: List of client IDs (optional, for weighted aggregation)
+            
+        Returns:
+            weighted_avg: Weighted average update tensor
+            weights: List of weights used for each client
+        """
+        if client_ids is not None and len(client_ids) == len(updates):
+            weights = []
+            # Use dictionary lookup for O(1) access instead of linear search
+            client_dict = getattr(self, 'client_dict', {c.client_id: c for c in self.clients})
+            for cid in client_ids:
+                client = client_dict.get(cid)
+                if client:
+                    if getattr(client, 'is_attacker', False):
+                        D_i = float(getattr(client, 'claimed_data_size', 1.0))
+                    else:
+                        D_i = float(len(getattr(client, 'data_indices', [])) or 1.0)
+                else:
+                    D_i = 1.0
+                weights.append(D_i)
+            
+            total_D = sum(weights) + 1e-12
+            weighted_avg = torch.zeros_like(updates[0])
+            for update, w in zip(updates, weights):
+                weighted_avg += (w / total_D) * update
+        else:
+            weighted_avg = torch.stack(updates).mean(dim=0)
+            weights = [1.0 / len(updates)] * len(updates)
+        
+        return weighted_avg, weights
 
     def _compute_similarities(self, updates: List[torch.Tensor], client_ids: List[int] = None) -> np.ndarray:
         """
@@ -92,41 +132,13 @@ class Server:
 
         print("  📊 Computing cosine similarities (weighted aggregation, matches attack optimization)")
 
-        # Compute weighted average (FedAvg style) to match attack optimization
-        if client_ids is not None and len(client_ids) == len(updates):
-            # Get data sizes for weighting
-            weights = []
-            for cid in client_ids:
-                client = next((c for c in self.clients if c.client_id == cid), None)
-                if client:
-                    if getattr(client, 'is_attacker', False):
-                        # For attackers, use claimed_data_size
-                        D_i = float(getattr(client, 'claimed_data_size', 1.0))
-                    else:
-                        # For benign clients, use actual data size
-                        D_i = float(len(getattr(client, 'data_indices', [])) or 1.0)
-                else:
-                    D_i = 1.0  # Fallback
-                weights.append(D_i)
-            
-            total_D = sum(weights) + 1e-12
-            weighted_avg = torch.zeros_like(updates[0])
-            for update, w in zip(updates, weights):
-                weighted_avg += (w / total_D) * update
-        else:
-            # Fallback to simple average if client_ids not provided
-            weighted_avg = torch.stack(updates).mean(dim=0)
+        # Compute weighted average (shared with distance calculation)
+        weighted_avg, _ = self._compute_weighted_average(updates, client_ids)
         
-        # Compute cosine similarity for each update
-        similarities = []
-        for update in updates:
-            sim = torch.cosine_similarity(
-                update.unsqueeze(0),
-                weighted_avg.unsqueeze(0)
-            ).item()
-            similarities.append(sim)
-
-        similarities = np.array(similarities)
+        # Compute cosine similarity for all updates at once (batch computation)
+        updates_stack = torch.stack(updates)  # (N, D)
+        weighted_avg_expanded = weighted_avg.unsqueeze(0).expand_as(updates_stack)  # (N, D)
+        similarities = torch.cosine_similarity(updates_stack, weighted_avg_expanded, dim=1).cpu().numpy()
 
         # Print information
         print(f"  📈 Cosine Similarity - Mean: {similarities.mean():.3f}, "
@@ -173,39 +185,14 @@ class Server:
         
         print("  📊 Computing Euclidean distances (weighted aggregation, matches attack optimization)")
         
-        # Compute weighted average (FedAvg style) to match attack optimization
-        if client_ids is not None and len(client_ids) == len(updates):
-            # Get data sizes for weighting
-            weights = []
-            for cid in client_ids:
-                client = next((c for c in self.clients if c.client_id == cid), None)
-                if client:
-                    if getattr(client, 'is_attacker', False):
-                        # For attackers, use claimed_data_size
-                        D_i = float(getattr(client, 'claimed_data_size', 1.0))
-                    else:
-                        # For benign clients, use actual data size
-                        D_i = float(len(getattr(client, 'data_indices', [])) or 1.0)
-                else:
-                    D_i = 1.0  # Fallback
-                weights.append(D_i)
-            
-            total_D = sum(weights) + 1e-12
-            weighted_avg = torch.zeros_like(updates[0])
-            for update, w in zip(updates, weights):
-                weighted_avg += (w / total_D) * update
-        else:
-            # Fallback to simple average if client_ids not provided
-            weighted_avg = torch.stack(updates).mean(dim=0)
+        # Compute weighted average (shared with similarity calculation)
+        weighted_avg, _ = self._compute_weighted_average(updates, client_ids)
         
-        # Compute Euclidean distance for each update
-        distances = []
-        for update in updates:
-            # Euclidean distance: ||update - weighted_avg||
-            dist = torch.norm(update - weighted_avg).item()
-            distances.append(dist)
-        
-        distances = np.array(distances)
+        # Compute Euclidean distance for all updates at once (batch computation)
+        updates_stack = torch.stack(updates)  # (N, D)
+        weighted_avg_expanded = weighted_avg.unsqueeze(0).expand_as(updates_stack)  # (N, D)
+        diff = updates_stack - weighted_avg_expanded  # (N, D)
+        distances = torch.norm(diff, dim=1).cpu().numpy()
         
         # Print information
         print(f"  📈 Euclidean Distance - Mean: {distances.mean():.6f}, "

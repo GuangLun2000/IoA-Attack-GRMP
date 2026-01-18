@@ -2313,8 +2313,8 @@ class AttackerClient(Client):
                     self.benign_updates
                 )
                 initial_dist = initial_dist_tensor.item()
-                d_T_val = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T
-                initial_g = initial_dist - d_T_val
+                d_T_val = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T if self.d_T is not None else None
+                initial_g = initial_dist - d_T_val if d_T_val is not None else 0.0
                 initial_lambda = self.lambda_dt.item() if isinstance(self.lambda_dt, torch.Tensor) else self.lambda_dt if self.lambda_dt is not None else 0.0
                 initial_loss = self._compute_global_loss(proxy_param, self.benign_updates).item()
                 print(f"    [Attacker {self.client_id}] Starting optimization (UPDATE space): "
@@ -2325,6 +2325,9 @@ class AttackerClient(Client):
                 import traceback
                 traceback.print_exc()
                 raise
+        
+        # Pre-convert d_T to scalar once before loop (avoid repeated conversion)
+        d_T_val_loop = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T if self.d_T is not None else None
         
         # Early stopping variables: track constraint satisfaction stability
         constraint_satisfied_steps = 0
@@ -2401,9 +2404,8 @@ class AttackerClient(Client):
                 #   rho = getattr(self, "lagrangian_rho", 10.0)
                 #   penalty = lambda_dt_tensor * g + 0.5 * rho * (F.relu(g) ** 2)
                 # ============================================================
-                # CRITICAL: Convert d_T to scalar if it's a tensor
-                d_T_val = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T if self.d_T is not None else None
-                g = dist_to_global_for_objective - d_T_val if d_T_val is not None else torch.tensor(0.0, device=self.device)
+                # Use pre-converted d_T_val_loop (converted before loop to avoid repeated conversion)
+                g = dist_to_global_for_objective - d_T_val_loop if d_T_val_loop is not None else torch.tensor(0.0, device=self.device)
                 
                 # Standard Lagrangian: provides directional guidance even when constraint is satisfied
                 # penalty = λ * (dist - d_T)
@@ -2468,7 +2470,7 @@ class AttackerClient(Client):
                 d_T_val = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T if self.d_T is not None else None
                 if d_T_val is not None:
                     dist_to_global, _ = self._compute_distance_update_space(
-                    proxy_param,
+                        proxy_param,
                         self.benign_updates
                     )
                     constraint_b_violation = F.relu(dist_to_global - d_T_val)
@@ -2557,20 +2559,15 @@ class AttackerClient(Client):
                 # When constraint is violated (constraint value > bound), subgradient > 0, λ increases to penalize violation
                 
                 if self.d_T is not None:
-                # Calculate distance in UPDATE space after step()
-                    current_dist_tensor, _ = self._compute_distance_update_space(
-                        proxy_param,
-                    self.benign_updates
-                    )
-                    current_dist = current_dist_tensor.item()
+                    # Reuse distance computed in objective function above (no need to recompute)
+                    current_dist = dist_to_global_for_objective.item()
                     lambda_val = self.lambda_dt.item() if isinstance(self.lambda_dt, torch.Tensor) else self.lambda_dt
                     # Standard dual ascent update: λ(t+1) = max(0, λ(t) + α_λ * g)
                     # where g = dist - d_T is the constraint violation
                     # - If constraint is violated (g > 0): λ increases to penalize violation
                     # - If constraint is satisfied (g < 0): λ decreases (but clamped to ≥ 0)
                     #   This allows the system to "relax" when constraint is well-satisfied
-                    d_T_val = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T
-                    g_val = current_dist - d_T_val
+                    g_val = current_dist - d_T_val_loop if d_T_val_loop is not None else 0.0
                     new_lambda = lambda_val + self.lambda_lr * g_val
                     new_lambda = max(0.0, new_lambda)  # Ensure non-negative
                     # OPTIMIZATION 5: Keep multiplier on same device when updating
@@ -2591,10 +2588,10 @@ class AttackerClient(Client):
                     # Strategy: Stop after N consecutive steps satisfying constraint
                     # This prevents premature stopping due to temporary fluctuations
                     # and avoids violating constraint after satisfying it (e.g., Attacker 8)
-                    if current_dist <= d_T_val:
+                    if current_dist <= d_T_val_loop if d_T_val_loop is not None else False:
                         constraint_satisfied_steps += 1
                         if constraint_satisfied_steps >= constraint_stability_steps:
-                            print(f"    [Attacker {self.client_id}] Early stopping: dist={current_dist:.4f} <= d_T={d_T_val:.4f} "
+                            print(f"    [Attacker {self.client_id}] Early stopping: dist={current_dist:.4f} <= d_T={d_T_val_loop:.4f} "
                                   f"for {constraint_satisfied_steps} consecutive steps (step {step}/{self.proxy_steps-1})")
                             break
                     else:
