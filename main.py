@@ -666,7 +666,7 @@ def main():
         'attack_start_round': 0,  # Round when attack phase starts (int, now all rounds use complete poisoning)
         
         # ========== Formula 4 Constraint Parameters ==========
-        'd_T': 2.0,  # Base distance threshold for constraint (4b): d(w'_j(t), w'_g(t)) ≤ d_T
+        'd_T': None,  # Distance threshold for constraint (4b): d(w'_j(t), w'_g(t)) ≤ d_T (None = use benign mean distance)
         'sim_T': None,  # Cosine similarity upper bound: cos(Δ_att, Δ_g) ≤ sim_T (None = use benign mean similarity)
         
         # ========== VGAE Training Parameters ==========

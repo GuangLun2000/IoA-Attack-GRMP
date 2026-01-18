@@ -1723,6 +1723,54 @@ class AttackerClient(Client):
             'median': benign_similarities_tensor.median()
         }
     
+    def _compute_benign_distance_statistics(self, benign_updates: List[torch.Tensor],
+                                           malicious_update: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """
+        Compute statistics of distances from benign updates to aggregated update.
+        
+        For each benign update Δ_i, compute distance ||Δ_i - Δ_g||,
+        where Δ_g is the aggregated update (including attacker).
+        
+        Args:
+            benign_updates: List of all benign updates Δ_i
+            malicious_update: Δ_att (attacker's update, used for aggregation reference)
+        
+        Returns:
+            Dictionary with statistics: mean, std, min, max, median
+        """
+        # Compute aggregated update (for reference, same as distance calculation)
+        aggregated_update, _, _ = self._aggregate_update_no_beta(malicious_update, benign_updates)
+        aggregated_flat = aggregated_update.view(-1)
+        device = aggregated_flat.device
+        
+        # Compute distance for each benign update
+        benign_distances = []
+        for benign_update in benign_updates:
+            benign_flat = benign_update.view(-1).to(device)
+            diff = benign_flat - aggregated_flat
+            dist = torch.norm(diff)
+            benign_distances.append(dist)
+        
+        if len(benign_distances) == 0:
+            # Return dummy statistics if no benign updates
+            return {
+                'mean': torch.tensor(0.0, device=device),
+                'std': torch.tensor(0.0, device=device),
+                'min': torch.tensor(0.0, device=device),
+                'max': torch.tensor(0.0, device=device),
+                'median': torch.tensor(0.0, device=device)
+            }
+        
+        benign_distances_tensor = torch.stack(benign_distances)
+        
+        return {
+            'mean': benign_distances_tensor.mean(),
+            'std': benign_distances_tensor.std(),
+            'min': benign_distances_tensor.min(),
+            'max': benign_distances_tensor.max(),
+            'median': benign_distances_tensor.median()
+        }
+    
     def _hard_project_update_space(self, malicious_update: torch.Tensor,
                                      benign_updates: List[torch.Tensor],
                                      d_T: float):
@@ -2237,28 +2285,53 @@ class AttackerClient(Client):
               f"proxy_param.shape={proxy_param.shape}, proxy_param.numel()={proxy_param.numel()}, "
               f"_flat_numel={self._flat_numel}, use_lora={use_lora}")
         
+        # Cache benign distance statistics before loop (for automatic d_T calculation)
+        # Similar to similarity constraint: if d_T is None, use benign mean distance
+        if len(self.benign_updates) > 0:
+            cached_benign_dist_stats = self._compute_benign_distance_statistics(
+                self.benign_updates,
+                proxy_param
+            )
+        else:
+            cached_benign_dist_stats = None
+        
+        # Pre-convert d_T to scalar once before loop (avoid repeated conversion)
+        # If d_T is None, use benign mean distance (similar to sim_T logic)
         if self.d_T is not None:
+            d_T_val_loop = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T
+            d_T_source = "manual"
+        else:
+            # Use benign mean distance when d_T is None
+            if cached_benign_dist_stats is not None:
+                d_T_val_loop = float(cached_benign_dist_stats['mean'].item())
+                d_T_source = "benign_mean"
+            else:
+                d_T_val_loop = None
+                d_T_source = "none"
+        
+        # Store effective d_T for use in final constraint check
+        self._effective_d_T = d_T_val_loop
+        
+        # Print initial state with d_T value (whether manual or auto-computed)
+        if d_T_val_loop is not None:
             try:
                 initial_dist_tensor, _ = self._compute_distance_update_space(
                     proxy_param,
                     self.benign_updates
                 )
                 initial_dist = initial_dist_tensor.item()
-                d_T_val = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T if self.d_T is not None else None
-                initial_g = initial_dist - d_T_val if d_T_val is not None else 0.0
+                initial_g = initial_dist - d_T_val_loop
                 initial_lambda = self.lambda_dt.item() if isinstance(self.lambda_dt, torch.Tensor) else self.lambda_dt if self.lambda_dt is not None else 0.0
                 initial_loss = self._compute_global_loss(proxy_param, self.benign_updates).item()
+                d_T_info = f"d_T={d_T_val_loop:.4f} ({d_T_source})" if d_T_source != "none" else "d_T=None"
                 print(f"    [Attacker {self.client_id}] Starting optimization (UPDATE space): "
-                      f"initial_dist={initial_dist:.4f}, d_T={d_T_val:.4f}, g={initial_g:.4f}, "
+                      f"initial_dist={initial_dist:.4f}, {d_T_info}, g={initial_g:.4f}, "
                       f"lambda={initial_lambda:.4f}, loss={initial_loss:.4f}, steps={self.proxy_steps}")
             except Exception as e:
                 print(f"    [Attacker {self.client_id}] ERROR computing initial state: {e}")
                 import traceback
                 traceback.print_exc()
                 raise
-        
-        # Pre-convert d_T to scalar once before loop (avoid repeated conversion)
-        d_T_val_loop = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T if self.d_T is not None else None
         
         # Cache benign cosine similarity statistics before loop (avoid recomputation each step)
         if self.use_cosine_similarity_constraint and len(self.benign_updates) > 0:
@@ -2540,22 +2613,21 @@ class AttackerClient(Client):
                         new_lambda_sim = max(0.0, new_lambda_sim)  # Ensure non-negative
                         self.lambda_sim = torch.tensor(new_lambda_sim, device=target_device, requires_grad=False)
                 
-                    # Logging: Print every step for detailed monitoring
-                    # Print more frequently for better visibility (every step or every 5 steps)
-                    print_freq = 1 if self.proxy_steps <= 20 else 5  # Print every step if <=20 steps, else every 5 steps
-                    if step % print_freq == 0 or step == 0 or step == self.proxy_steps - 1:
-                        grad_norm = proxy_param.grad.norm().item() if proxy_param.grad is not None else 0.0
-                        log_msg = f"      [Attacker {self.client_id}] Step {step}/{self.proxy_steps-1}: " \
-                                  f"dist={current_dist:.4f}, g={g_val:.4f}, lambda={lambda_val:.4f}, " \
-                                  f"loss={global_loss.item():.4f}, grad_norm={grad_norm:.4f}"
-                        # Add similarity constraint info if enabled
-                        if self.use_cosine_similarity_constraint and cached_benign_sim_stats is not None:
-                            # Recompute attacker_sim for logging (or use cached value if available)
-                            attacker_sim_log = self._compute_cosine_similarity_to_aggregated(proxy_param, self.benign_updates).item()
-                            benign_sim_mean_val = cached_benign_sim_stats['mean'].item()
-                            lambda_sim_val = self.lambda_sim.item() if self.lambda_sim is not None else 0.0
-                            log_msg += f", sim={attacker_sim_log:.4f}, sim_benign_mean={benign_sim_mean_val:.4f}, lambda_sim={lambda_sim_val:.4f}"
-                        print(log_msg)
+                    # Logging: Print every step with lambda and lambda_sim values (both before and after update)
+                    # Print every step to track lambda and lambda_sim evolution
+                    grad_norm = proxy_param.grad.norm().item() if proxy_param.grad is not None else 0.0
+                    log_msg = f"      [Attacker {self.client_id}] Step {step}/{self.proxy_steps-1}: " \
+                              f"dist={current_dist:.4f}, g={g_val:.4f}, " \
+                              f"lambda({lambda_val:.4f}→{new_lambda:.4f}), " \
+                              f"loss={global_loss.item():.4f}, grad_norm={grad_norm:.4f}"
+                    # Add similarity constraint info if enabled
+                    if self.use_cosine_similarity_constraint and cached_benign_sim_stats is not None:
+                        # Recompute attacker_sim for logging (or use cached value if available)
+                        attacker_sim_log = self._compute_cosine_similarity_to_aggregated(proxy_param, self.benign_updates).item()
+                        benign_sim_mean_val = cached_benign_sim_stats['mean'].item()
+                        log_msg += f", sim={attacker_sim_log:.4f}, sim_benign_mean={benign_sim_mean_val:.4f}, " \
+                                   f"lambda_sim({lambda_sim_val:.4f}→{new_lambda_sim:.4f}), g_sim={g_sim_val:.4f}"
+                    print(log_msg)
                     
                     # ============================================================
                     # Early stopping: Stop when ALL constraints are satisfied and stable
@@ -2684,13 +2756,15 @@ class AttackerClient(Client):
         # ============================================================
         # Print final optimization state
         # ============================================================
-        if self.d_T is not None:
+        # Use effective d_T (which may be auto-computed from benign mean if self.d_T is None)
+        effective_d_T_final = getattr(self, '_effective_d_T', self.d_T)
+        if effective_d_T_final is not None:
             final_dist_tensor, _ = self._compute_distance_update_space(
                 proxy_param,
                 self.benign_updates
             )
             final_dist = final_dist_tensor.item()
-            d_T_val = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T
+            d_T_val = float(effective_d_T_final) if isinstance(effective_d_T_final, torch.Tensor) else effective_d_T_final
             final_g = final_dist - d_T_val
             final_lambda = self.lambda_dt.item() if isinstance(self.lambda_dt, torch.Tensor) else self.lambda_dt if self.lambda_dt is not None else 0.0
             final_loss = self._compute_global_loss(proxy_param, self.benign_updates).item()
@@ -2720,14 +2794,16 @@ class AttackerClient(Client):
         if self.use_lagrangian_dual:
             # Final constraint check: Graded projection strategy (within Lagrangian framework)
             # Use different strategies based on violation degree to balance flexibility and constraint satisfaction
-            if self.d_T is not None:
+            # Use effective d_T (which may be auto-computed from benign mean if self.d_T is None)
+            effective_d_T = getattr(self, '_effective_d_T', self.d_T)
+            if effective_d_T is not None:
                 # Use UPDATE space distance calculation
                 dist_to_global_tensor, _ = self._compute_distance_update_space(
                     malicious_update,
                     self.benign_updates
                 )
                 dist_to_global = dist_to_global_tensor.item()
-                d_T_val = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T
+                d_T_val = float(effective_d_T) if isinstance(effective_d_T, torch.Tensor) else effective_d_T
                 constraint_violation = max(0, dist_to_global - d_T_val)
                 violation_ratio = constraint_violation / d_T_val if d_T_val > 0 else 0.0
                 
@@ -2744,13 +2820,13 @@ class AttackerClient(Client):
                         if violation_ratio > 1.00:  # Severe violation (>100%)
                             # Strict projection to d_T, completely satisfy constraint
                             # Only applied when violation is extremely severe to preserve optimization stability
-                            d_T_val = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T
-                            scale_factor = d_T_val / dist_to_global
+                            d_T_val_proj = float(effective_d_T) if isinstance(effective_d_T, torch.Tensor) else effective_d_T
+                            scale_factor = d_T_val_proj / dist_to_global
                             malicious_update = malicious_update * scale_factor
                             print(f"      Applied strict projection (violation >100%): scaled to d_T")
                         elif violation_ratio > 0.50:  # Moderate violation (50-100%)
                             # Mild projection to 1.1×d_T, allowing 10% margin for Lagrangian flexibility
-                            d_T_proj_final = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T
+                            d_T_proj_final = float(effective_d_T) if isinstance(effective_d_T, torch.Tensor) else effective_d_T
                             target_dist = d_T_proj_final * 1.1
                             scale_factor = target_dist / dist_to_global
                             malicious_update = malicious_update * scale_factor
