@@ -673,16 +673,16 @@ def main():
         # Reference paper: input_dim=5, hidden1_dim=32, hidden2_dim=16, num_epoch=10, lr=0.01
         # Note: dim_reduction_size should be <= total trainable parameters
         'dim_reduction_size': 10000,  # Reduced dimensionality of LLM parameters (auto-adjusted for LoRA if needed)
-        'vgae_epochs': 20,  # Number of epochs for VGAE training (reference: 10)
+        'vgae_epochs': 50,  # Number of epochs for VGAE training (reference: 10)
         'vgae_lr': 0.01,  # Learning rate for VGAE optimizer (reference: 0.01)
-        'vgae_hidden_dim': 32,  # VGAE hidden layer dimension (per paper: hidden1_dim=32)
-        'vgae_latent_dim': 16,  # VGAE latent space dimension (per paper: hidden2_dim=16)
-        'vgae_dropout': 0.0,  # VGAE dropout rate (float, 0.0-1.0)
+        'vgae_hidden_dim': 64,  # VGAE hidden layer dimension (per paper: hidden1_dim=32)
+        'vgae_latent_dim': 32,  # VGAE latent space dimension (per paper: hidden2_dim=16)
+        'vgae_dropout': 0.1,  # VGAE dropout rate (float, 0.0-1.0)
         
         # ========== Attack Optimization Parameters ==========
         'proxy_step': 0.01,  # Step size for gradient-free ascent toward global-loss proxy
         'proxy_steps': 200,  # Number of optimization steps for attack objective (int)
-        'gsp_perturbation_scale': 0.01,  # Perturbation scale for GSP attack diversity (float)
+        'gsp_perturbation_scale': 0.001,  # Perturbation scale for GSP attack diversity (float)
         'opt_init_perturbation_scale': 0.01,  # Perturbation scale for optimization initialization (float)
         'grad_clip_norm': 2.0,  # Gradient clipping norm for training stability (float)
         'attacker_claimed_data_size': None,  # None = use actual assigned data size
