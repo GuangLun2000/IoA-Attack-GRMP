@@ -145,12 +145,12 @@ def setup_experiment(config):
         total_rounds=config['num_rounds'],
         server_lr=config['server_lr'],
         tolerance_factor=config['tolerance_factor'],
-        d_T=config['d_T'],
+        dist_bound=config.get('dist_bound', config.get('d_T', 0.5)),  # Renamed from d_T
         defense_high_rejection_threshold=config['defense_high_rejection_threshold'],
         defense_threshold_decay=config['defense_threshold_decay']
     )
-    # Set sim_T from config (cosine similarity threshold)
-    server.sim_T = config.get('sim_T', None)
+    # Set sim_center from config (cosine similarity center, optional)
+    server.sim_center = config.get('sim_center', config.get('sim_T', None))
 
     # 6. Create Clients
     print("\nCreating federated learning clients...")
@@ -230,13 +230,15 @@ def setup_experiment(config):
             if config.get('use_lagrangian_dual', False):
                 client.set_lagrangian_params(
                     use_lagrangian_dual=config['use_lagrangian_dual'],
-                    lambda_init=config.get('lambda_init', 0.1),
-                    lambda_lr=config.get('lambda_lr', 0.01),
+                    lambda_dist_init=config.get('lambda_dist_init', config.get('lambda_init', 0.1)),
+                    lambda_dist_lr=config.get('lambda_dist_lr', config.get('lambda_lr', 0.01)),
                     use_cosine_similarity_constraint=config.get('use_cosine_similarity_constraint', False),
-                    lambda_sim_init=config.get('lambda_sim_init', 0.1),
-                    lambda_sim_lr=config.get('lambda_sim_lr', 0.01)
+                    lambda_sim_low_init=config.get('lambda_sim_low_init', config.get('lambda_sim_init', 0.1)),
+                    lambda_sim_up_init=config.get('lambda_sim_up_init', config.get('lambda_sim_init', 0.1)),
+                    lambda_sim_low_lr=config.get('lambda_sim_low_lr', config.get('lambda_sim_lr', 0.01)),
+                    lambda_sim_up_lr=config.get('lambda_sim_up_lr', config.get('lambda_sim_lr', 0.01))
                 )
-                print(f"    Lagrangian Dual enabled: λ(1)={config.get('lambda_init', 0.1)}")
+                print(f"    Lagrangian Dual enabled: λ_dist(1)={config.get('lambda_dist_init', config.get('lambda_init', 0.1))}")
             else:
                 print(f"    Using hard constraint mechanism (Lagrangian Dual disabled)")
 
@@ -662,8 +664,8 @@ def main():
         'attack_start_round': 0,  # Round when attack phase starts (int, now all rounds use complete poisoning)
         
         # ========== Formula 4 Constraint Parameters ==========
-        'd_T': None,  # Distance threshold for constraint (4b): d(w'_j(t), w'_g(t)) ≤ d_T (None = use benign mean distance)
-        'sim_T': None,  # Cosine similarity upper bound: cos(Δ_att, Δ_g) ≤ sim_T (None = use benign mean similarity)
+        'dist_bound': None,  # Distance threshold for constraint (4b): d(w'_j(t), w'_g(t)) ≤ dist_bound (None = use benign max distance)
+        'sim_center': None,  # Optional center for similarity bounds (None = use benign min/max)
         
         # ========== VGAE Training Parameters ==========
         # Reference paper: input_dim=5, hidden1_dim=32, hidden2_dim=16, num_epoch=10, lr=0.01
@@ -687,13 +689,16 @@ def main():
         # ========== Lagrangian Dual Parameters ==========
         'use_lagrangian_dual': True,  # Whether to use Lagrangian Dual mechanism (bool, True/False)
         
-        # Lagrangian multiplier parameters
-        'lambda_init': 100,  # Initial λ(t) value for constraint (4b): d(w'_j, w'_g) ≤ d_T
-        'lambda_lr': 1.0,    # Learning rate for λ(t) update (dual ascent step size)
-        # ========== Cosine Similarity Constraint Parameters ==========
-        'lambda_sim_init': 100,  # Initial λ_sim(t) value for cosine similarity constraint: attacker_sim >= benign_sim_mean
-        'lambda_sim_lr': 1.0,  # Learning rate for λ_sim(t) update (dual ascent step size, typically same as lambda_lr)
-        'use_cosine_similarity_constraint': True,  # Whether to enable cosine similarity constraint (bool, True/False)
+        # Distance constraint multiplier parameters
+        'lambda_dist_init': 100,  # Initial λ_dist(t) value for distance constraint: dist(Δ_att, Δ_g) ≤ dist_bound
+        'lambda_dist_lr': 1.0,    # Learning rate for λ_dist(t) update (dual ascent step size)
+        
+        # ========== Cosine Similarity Constraint Parameters (TWO-SIDED with TWO multipliers) ==========
+        'use_cosine_similarity_constraint': True,  # Whether to enable cosine similarity constraints (bool, True/False)
+        'lambda_sim_low_init': 100,  # Initial λ_sim_low(t) value for lower bound constraint: sim_bound_low <= sim_att
+        'lambda_sim_up_init': 100,   # Initial λ_sim_up(t) value for upper bound constraint: sim_att <= sim_bound_up
+        'lambda_sim_low_lr': 1.0,    # Learning rate for λ_sim_low(t) update
+        'lambda_sim_up_lr': 1.0,     # Learning rate for λ_sim_up(t) update
         
         # ========== Proxy Loss Estimation Parameters ==========
         'proxy_sample_size': 512,  # Number of samples in proxy dataset for F(w'_g) estimation (int)
