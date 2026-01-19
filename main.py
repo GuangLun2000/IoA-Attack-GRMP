@@ -232,17 +232,13 @@ def setup_experiment(config):
                     use_lagrangian_dual=config['use_lagrangian_dual'],
                     lambda_init=config.get('lambda_init', 0.1),
                     lambda_lr=config.get('lambda_lr', 0.01),
-                    enable_final_projection=config.get('enable_final_projection', True),
-                    enable_light_projection_in_loop=config.get('enable_light_projection_in_loop', True),
                     use_cosine_similarity_constraint=config.get('use_cosine_similarity_constraint', False),
                     lambda_sim_init=config.get('lambda_sim_init', 0.1),
                     lambda_sim_lr=config.get('lambda_sim_lr', 0.01)
                 )
-                final_proj_status = "enabled" if config.get('enable_final_projection', True) else "disabled"
-                light_proj_status = "enabled" if config.get('enable_light_projection_in_loop', True) else "disabled"
-                print(f"    Lagrangian Dual enabled: λ(1)={config.get('lambda_init', 0.1)}, final projection={final_proj_status}, light projection in loop={light_proj_status}")
+                print(f"    Lagrangian Dual enabled: λ(1)={config.get('lambda_init', 0.1)}")
             else:
-                print(f"    Using hard constraint projection (Lagrangian Dual disabled)")
+                print(f"    Using hard constraint mechanism (Lagrangian Dual disabled)")
 
         server.register_client(client)
     
@@ -690,8 +686,6 @@ def main():
 
         # ========== Lagrangian Dual Parameters ==========
         'use_lagrangian_dual': True,  # Whether to use Lagrangian Dual mechanism (bool, True/False)
-        'enable_light_projection_in_loop': False,  # Whether to apply light projection within optimization loop (bool, True/False)
-        'enable_final_projection': False,  # Whether to apply final projection after optimization (bool, True/False)
         
         # Lagrangian multiplier parameters
         'lambda_init': 100,  # Initial λ(t) value for constraint (4b): d(w'_j, w'_g) ≤ d_T

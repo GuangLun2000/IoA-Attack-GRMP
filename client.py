@@ -338,8 +338,6 @@ class AttackerClient(Client):
         self.lambda_lr = 0.01  # Learning rate for λ(t) update
         # Save initial values for reset in prepare_for_round (Modification 1 and 2)
         self.lambda_init_value = None  # Save initial λ value for reset in prepare_for_round
-        self.enable_final_projection = True  # Whether to apply final projection after optimization (only for Lagrangian mode)
-        self.enable_light_projection_in_loop = True  # Whether to apply light projection within optimization loop (only for Lagrangian mode)
         
         # Cosine similarity constraint parameters (similar to distance constraint)
         self.use_cosine_similarity_constraint = False  # Whether to use cosine similarity constraint
@@ -1484,8 +1482,6 @@ class AttackerClient(Client):
     def set_lagrangian_params(self, use_lagrangian_dual: bool = False,
                               lambda_init: float = 0.1,
                               lambda_lr: float = 0.01,
-                              enable_final_projection: bool = True,
-                              enable_light_projection_in_loop: bool = True,
                               use_cosine_similarity_constraint: bool = False,
                               lambda_sim_init: float = 0.1,
                               lambda_sim_lr: float = 0.01,
@@ -1502,10 +1498,9 @@ class AttackerClient(Client):
             use_lagrangian_dual: Whether to use Lagrangian Dual mechanism
             lambda_init: Initial λ(1) value (≥0, per paper Algorithm 1)
             lambda_lr: Learning rate for λ(t) update (subgradient step size)
-            enable_final_projection: Whether to apply final projection after optimization (only for Lagrangian mode)
-                                   If False, completely relies on Lagrangian mechanism (no final projection)
-            enable_light_projection_in_loop: Whether to apply light projection within optimization loop (only for Lagrangian mode)
-                                           If False, no projection within optimization loop, only relies on Lagrangian mechanism
+            use_cosine_similarity_constraint: Whether to use cosine similarity constraint
+            lambda_sim_init: Initial λ_sim value (≥0)
+            lambda_sim_lr: Learning rate for λ_sim(t) update (subgradient step size)
         
         Modification 2: Save initial values for reset in prepare_for_round
         """
@@ -1517,8 +1512,6 @@ class AttackerClient(Client):
             self.lambda_init_value = max(0.0, lambda_init)
             self.lambda_dt = torch.tensor(self.lambda_init_value, requires_grad=False)
             self.lambda_lr = lambda_lr
-            self.enable_final_projection = enable_final_projection
-            self.enable_light_projection_in_loop = enable_light_projection_in_loop
             
             # Cosine similarity constraint parameters
             self.use_cosine_similarity_constraint = use_cosine_similarity_constraint
@@ -1530,11 +1523,9 @@ class AttackerClient(Client):
                 self.lambda_sim = None
                 self.lambda_sim_init_value = None
         else:
-            # Hard constraint projection mode
+            # Hard constraint mode (Lagrangian disabled)
             self.lambda_dt = None
             self.lambda_init_value = None
-            self.enable_final_projection = True  # Default to True for hard constraint mode (always applies projection)
-            self.enable_light_projection_in_loop = False  # Not applicable in hard constraint mode
 
     def _aggregate_update_no_beta(self, malicious_update: torch.Tensor, 
                                    benign_updates: List[torch.Tensor]) -> Tuple[torch.Tensor, float, List[float]]:
@@ -1836,28 +1827,6 @@ class AttackerClient(Client):
             'median': benign_distances_tensor.median()
         }
     
-    def _hard_project_update_space(self, malicious_update: torch.Tensor,
-                                     benign_updates: List[torch.Tensor],
-                                     d_T: float):
-        """
-        Project Δ_att onto {Δ: ||Δ - Δ_g|| <= d_T} in UPDATE space.
-        
-        Args:
-            malicious_update: Δ_att (attacker's update, modified in-place)
-            benign_updates: List of all benign updates Δ_i
-            d_T: distance threshold
-        """
-        with torch.no_grad():
-            dist, aggregated_update = self._compute_distance_update_space(malicious_update, benign_updates)
-            dist_val = float(dist.item())
-            d_T_val = float(d_T) if isinstance(d_T, torch.Tensor) else float(d_T)
-            
-            if dist_val > d_T_val:
-                # Project: Δ_att_new = Δ_g + (Δ_att - Δ_g) * (d_T / ||Δ_att - Δ_g||)
-                diff = malicious_update.view(-1) - aggregated_update.view(-1)
-                diff = diff * (d_T_val / (dist_val + 1e-12))
-                malicious_update.copy_((aggregated_update.view(-1) + diff).view_as(malicious_update))
-    
     def _compute_global_loss(self, malicious_update: torch.Tensor, 
                             benign_updates: List[torch.Tensor]) -> torch.Tensor:
         """
@@ -1908,28 +1877,6 @@ class AttackerClient(Client):
         diff = malicious_update.view(-1) - aggregated_update.view(-1)
         distance = torch.norm(diff)
         return distance, aggregated_update
-    
-    def _hard_project_update_space(self, malicious_update: torch.Tensor,
-                                     benign_updates: List[torch.Tensor],
-                                     d_T: float):
-        """
-        Project Δ_att onto {Δ: ||Δ - Δ_g|| <= d_T} in UPDATE space.
-        
-        Args:
-            malicious_update: Δ_att (attacker's update, modified in-place)
-            benign_updates: List of all benign updates Δ_i
-            d_T: distance threshold
-        """
-        with torch.no_grad():
-            dist, aggregated_update = self._compute_distance_update_space(malicious_update, benign_updates)
-            dist_val = float(dist.item())
-            d_T_val = float(d_T) if isinstance(d_T, torch.Tensor) else float(d_T)
-            
-            if dist_val > d_T_val:
-                # Project: Δ_att_new = Δ_g + (Δ_att - Δ_g) * (d_T / ||Δ_att - Δ_g||)
-                diff = malicious_update.view(-1) - aggregated_update.view(-1)
-                diff = diff * (d_T_val / (dist_val + 1e-12))
-                malicious_update.copy_((aggregated_update.view(-1) + diff).view_as(malicious_update))
     
     def _compute_real_distance_to_global(self, malicious_update: torch.Tensor,
                                          benign_updates: List[torch.Tensor],
@@ -2231,12 +2178,6 @@ class AttackerClient(Client):
             # GSP attack is None: malicious_update remains zeros
             print(f"    [Attacker {self.client_id}] GSP attack is None, using zeros")
         
-        # ============================================================
-        # Pre-projection removed: Let Lagrangian mechanism handle constraint control directly
-        # Reason: Pre-projection effect was negated by optimization process (distance grew back to similar values)
-        # If Lagrangian mechanism is effective, it should handle initial distance directly
-        # If Lagrangian mechanism is ineffective, pre-projection also doesn't help
-        # ============================================================
         # ============================================================
         # STEP 5: (Removed - attackers don't perform local training)
         # Attackers are data-agnostic and don't have local data for training.
@@ -2578,7 +2519,7 @@ class AttackerClient(Client):
                 constraint_b_violation = F.relu(g) if self.d_T is not None else torch.tensor(0.0, device=self.device)
                 
             else:
-                # ========== Use hard constraint projection mechanism (original logic) ==========
+                # ========== Use hard constraint mechanism (Lagrangian disabled) ==========
                 # Objective: maximize global_loss => minimize -global_loss
                 lagrangian_objective = -global_loss
                 
@@ -2804,79 +2745,6 @@ class AttackerClient(Client):
                         constraint_satisfied_steps = 0  # Reset counter when any constraint is violated
                     
                     prev_dist_val = current_dist
-            
-            # ============================================================
-            # Modification 4: Add constraint safeguard mechanism within optimization loop (Lagrangian framework)
-            # Under Lagrangian mechanism, add light projection as safeguard to prevent optimization path from deviating too far
-            # ============================================================
-            # ============================================================
-            # CRITICAL: Projection must use no_grad() + in-place op, NOT .data
-            # ============================================================
-            if not self.use_lagrangian_dual and self.d_T is not None:
-                # ============================================================
-                # CRITICAL FIX: Hard constraint projection using REAL distance
-                # ============================================================
-                # Hard constraint mechanism: Project in UPDATE space
-                # ============================================================
-                dist_tensor, _ = self._compute_distance_update_space(
-                    proxy_param,
-                    self.benign_updates
-                )
-                dist = dist_tensor.item()
-                d_T_val = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T
-                
-                if dist > d_T_val:
-                    # Hard projection in UPDATE space
-                    self._hard_project_update_space(proxy_param, self.benign_updates, d_T_val)
-                    
-                    new_dist_tensor, _ = self._compute_distance_update_space(
-                        proxy_param,
-                        self.benign_updates
-                    )
-                    new_dist = new_dist_tensor.item()
-                    print_freq = 1 if self.proxy_steps <= 20 else 5
-                    if step % print_freq == 0 or step == 0 or step == self.proxy_steps - 1:
-                        d_T_print = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T
-                        print(f"      [Attacker {self.client_id}] Step {step}/{self.proxy_steps-1}: Hard projection applied (UPDATE space): "
-                              f"dist {dist:.4f} -> {new_dist:.4f} (target: {d_T_print:.4f})")
-            elif self.use_lagrangian_dual and self.d_T is not None:
-                # ============================================================
-                # Optional: Light projection safeguard (can be softened/removed with hinge penalty)
-                # ============================================================
-                # Note: With hinge penalty (only penalizes violations), light projection
-                # may be less necessary as the objective already handles violations correctly.
-                # Consider removing or softening this projection after verifying standard Lagrangian behavior.
-                # ============================================================
-                if self.enable_light_projection_in_loop:
-                    dist_to_global_for_projection_tensor, _ = self._compute_distance_update_space(
-                        proxy_param,
-                        self.benign_updates
-                    )
-                    dist_to_global_for_projection = dist_to_global_for_projection_tensor.item()
-                    
-                    d_T_val = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T
-                    violation_ratio = (dist_to_global_for_projection - d_T_val) / d_T_val if d_T_val > 0 else 0.0
-                    
-                    if violation_ratio > 1:
-                        # Light projection to 1.5 × d_T, leaving margin to allow Lagrangian to continue optimizing
-                        d_T_proj = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T
-                        target_dist = d_T_proj * 1.5
-                        scale_factor = target_dist / dist_to_global_for_projection
-                        # CRITICAL: Use no_grad() + in-place op to avoid breaking gradients
-                        with torch.no_grad():
-                            proxy_param.mul_(scale_factor)
-                        
-                        # Logging: Print light projection information
-                        print_freq = 1 if self.proxy_steps <= 20 else 5
-                        if step % print_freq == 0 or step == 0 or step == self.proxy_steps - 1:
-                            new_dist_after_proj_tensor, _ = self._compute_distance_update_space(
-                                proxy_param,
-                                self.benign_updates
-                            )
-                            new_dist_after_proj = new_dist_after_proj_tensor.item()
-                            print(f"      [Attacker {self.client_id}] Step {step}/{self.proxy_steps-1}: Light projection applied: "
-                                  f"dist {dist_to_global_for_projection:.4f} -> {new_dist_after_proj:.4f} "
-                                  f"(target: {target_dist:.4f}, violation_ratio={violation_ratio:.2f})")
         
         # ============================================================
         # Print final optimization state
@@ -2914,70 +2782,29 @@ class AttackerClient(Client):
         torch.cuda.empty_cache()
         
         # ============================================================
-        # STEP 8: Final constraint check (depending on whether Lagrangian is used)
+        # STEP 8: Final constraint check (pure Lagrangian optimization, no projection)
         # ============================================================
-        if self.use_lagrangian_dual:
-            # Final constraint check: Graded projection strategy (within Lagrangian framework)
-            # Use different strategies based on violation degree to balance flexibility and constraint satisfaction
-            # Use effective d_T (which may be auto-computed from benign mean if self.d_T is None)
-            effective_d_T = getattr(self, '_effective_d_T', self.d_T)
-            if effective_d_T is not None:
-                # Use UPDATE space distance calculation
-                dist_to_global_tensor, _ = self._compute_distance_update_space(
-                    malicious_update,
-                    self.benign_updates
-                )
-                dist_to_global = dist_to_global_tensor.item()
-                d_T_val = float(effective_d_T) if isinstance(effective_d_T, torch.Tensor) else effective_d_T
-                constraint_violation = max(0, dist_to_global - d_T_val)
-                violation_ratio = constraint_violation / d_T_val if d_T_val > 0 else 0.0
-                
-                if constraint_violation > 0:
+        # Use effective d_T (which may be auto-computed from benign mean if self.d_T is None)
+        effective_d_T = getattr(self, '_effective_d_T', self.d_T)
+        if effective_d_T is not None:
+            # Use UPDATE space distance calculation
+            dist_to_global_tensor, _ = self._compute_distance_update_space(
+                malicious_update,
+                self.benign_updates
+            )
+            dist_to_global = dist_to_global_tensor.item()
+            d_T_val = float(effective_d_T) if isinstance(effective_d_T, torch.Tensor) else effective_d_T
+            constraint_violation = max(0, dist_to_global - d_T_val)
+            violation_ratio = constraint_violation / d_T_val if d_T_val > 0 else 0.0
+            
+            if constraint_violation > 0:
+                if self.use_lagrangian_dual:
                     lambda_val = self.lambda_dt.item() if isinstance(self.lambda_dt, torch.Tensor) else self.lambda_dt
                     print(f"    [Attacker {self.client_id}] Constraint(4b) violation: {constraint_violation:.6f} "
                           f"(λ={lambda_val:.4f}, violation={violation_ratio*100:.1f}%)")
-                    
-                    # Check if final projection is enabled
-                    if self.enable_final_projection:
-                        # Graded projection strategy (improved to allow Lagrangian mechanism to work):
-                        # Increased threshold from 30% to 100% to reduce frequent strict projection
-                        # This allows Lagrangian multipliers (λ) to effectively control violations
-                        if violation_ratio > 1.00:  # Severe violation (>100%)
-                            # Strict projection to d_T, completely satisfy constraint
-                            # Only applied when violation is extremely severe to preserve optimization stability
-                            d_T_val_proj = float(effective_d_T) if isinstance(effective_d_T, torch.Tensor) else effective_d_T
-                            scale_factor = d_T_val_proj / dist_to_global
-                            malicious_update = malicious_update * scale_factor
-                            print(f"      Applied strict projection (violation >100%): scaled to d_T")
-                        elif violation_ratio > 0.50:  # Moderate violation (50-100%)
-                            # Mild projection to 1.1×d_T, allowing 10% margin for Lagrangian flexibility
-                            d_T_proj_final = float(effective_d_T) if isinstance(effective_d_T, torch.Tensor) else effective_d_T
-                            target_dist = d_T_proj_final * 1.1
-                            scale_factor = target_dist / dist_to_global
-                            malicious_update = malicious_update * scale_factor
-                            print(f"      Applied mild projection (violation 50-100%): scaled to 1.1×d_T")
-                        else:  # Minor violation (<50%)
-                            # Allow minor violation, leverage Lagrangian mechanism flexibility
-                            # No projection, controlled by multipliers (λ, ρ)
-                            print(f"      Allowed minor violation (violation <50%): kept as is, controlled by Lagrangian multipliers")
-                    else:
-                        # Final projection is disabled: completely rely on Lagrangian mechanism
-                        print(f"      Final projection disabled: relying entirely on Lagrangian mechanism (violation={violation_ratio*100:.1f}%)")
-        else:
-            # Hard constraint projection mechanism (UPDATE space)
-            if self.d_T is not None:
-                # Use hard projection in UPDATE space
-                self._hard_project_update_space(malicious_update, self.benign_updates, self.d_T)
-                dist_to_global_tensor, _ = self._compute_distance_update_space(
-                    malicious_update,
-                    self.benign_updates
-                )
-                dist_to_global = dist_to_global_tensor.item()
-                d_T_val = float(self.d_T) if isinstance(self.d_T, torch.Tensor) else self.d_T
-                print(f"    [Attacker {self.client_id}] Final hard projection (UPDATE space): dist={dist_to_global:.4f}, d_T={d_T_val:.4f}")
-                final_norm = torch.norm(malicious_update).item()
-                print(f"    [Attacker {self.client_id}] Applied hard constraint projection: "
-                      f"scaled from {dist_to_global:.4f} to {final_norm:.4f}")
+                else:
+                    print(f"    [Attacker {self.client_id}] Constraint(4b) violation: {constraint_violation:.6f} "
+                          f"(violation={violation_ratio*100:.1f}%)")
         
         # Compute final attack objective value for logging
         # Use aggregated update for final loss (consistent with optimization objective)
