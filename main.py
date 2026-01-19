@@ -613,7 +613,7 @@ def main():
         'dirichlet_alpha': 100,  # Make data less extreme non-IID (higher alpha = more balanced)
         # 'dataset_size_limit': None,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
         'dataset_size_limit': 20000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
-        # 'dataset_size_limit': 20000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
+        # 'dataset_size_limit': 10000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
 
         # ========== Training Mode Configuration ==========
         'use_lora': False,  # True for LoRA fine-tuning, False for full fine-tuning
@@ -633,7 +633,7 @@ def main():
         
         # ========== Formula 4 Constraint Parameters ==========
         'dist_bound': 2.0,  # Distance threshold for constraint (4b): d(w'_j(t), w'_g(t)) ≤ dist_bound (None = use benign max distance)
-        'sim_center': 0.15,  # Optional center for similarity bounds (None = use benign min/max)
+        'sim_center': 0.2,  # Optional center for similarity bounds (None = use benign min/max)
         
         # ========== VGAE Training Parameters ==========
         # Reference paper: input_dim=5, hidden1_dim=32, hidden2_dim=16, num_epoch=10, lr=0.01
@@ -653,7 +653,7 @@ def main():
         'grad_clip_norm': 1.0,  # Gradient clipping norm for training stability (float)
         'attacker_claimed_data_size': None,  # None = use actual assigned data size
         'early_stop_constraint_stability_steps': 1,  # Early stopping: stop after N consecutive steps satisfying constraint (int)
-
+        
         # ========== Lagrangian Dual Parameters ==========
         'use_lagrangian_dual': True,  # Whether to use Lagrangian Dual mechanism (bool, True/False)
         
