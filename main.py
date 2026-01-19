@@ -647,7 +647,7 @@ def main():
         
         # ========== Attack Optimization Parameters ==========
         'proxy_step': 0.01,  # Step size for gradient-free ascent toward global-loss proxy
-        'proxy_steps': 200,  # Number of optimization steps for attack objective (int)
+        'proxy_steps': 150,  # Number of optimization steps for attack objective (int)
         'gsp_perturbation_scale': 0.01,  # Perturbation scale for GSP attack diversity (float)
         'opt_init_perturbation_scale': 0.01,  # Perturbation scale for optimization initialization (float)
         'grad_clip_norm': 1.0,  # Gradient clipping norm for training stability (float)
