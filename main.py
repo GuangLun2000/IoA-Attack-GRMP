@@ -594,7 +594,7 @@ def main():
         'seed': 42,  # Random seed for reproducibility (int), 42 is the default
         
         # ========== Federated Learning Setup ==========
-        'num_clients': 5,  # Total number of federated learning clients (int)
+        'num_clients': 7,  # Total number of federated learning clients (int)
         'num_attackers': 2,  # Number of attacker clients (int, must be < num_clients)
         'num_benign_clients': None,  # Optional: Explicit number of benign clients for baseline experiment
                                     # If None, baseline will use (num_clients - num_attackers) to ensure fair comparison
@@ -660,9 +660,8 @@ def main():
         # Distance constraint multiplier parameters
         'lambda_dist_init': 1,  # Initial λ_dist(t) value for distance constraint: dist(Δ_att, Δ_g) ≤ dist_bound
         'lambda_dist_lr': 1.0,    # Learning rate for λ_dist(t) update (dual ascent step size)
-        
         # ========== Cosine Similarity Constraint Parameters (TWO-SIDED with TWO multipliers) ==========
-        'use_cosine_similarity_constraint': False,  # Whether to enable cosine similarity constraints (bool, True/False)
+        'use_cosine_similarity_constraint': True,  # Whether to enable cosine similarity constraints (bool, True/False)
         'lambda_sim_low_init': 1,  # Initial λ_sim_low(t) value for lower bound constraint: sim_bound_low <= sim_att
         'lambda_sim_up_init': 1,   # Initial λ_sim_up(t) value for upper bound constraint: sim_att <= sim_bound_up
         'lambda_sim_low_lr': 1.0,    # Learning rate for λ_sim_low(t) update
