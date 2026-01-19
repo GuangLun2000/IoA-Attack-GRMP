@@ -694,7 +694,7 @@ def main():
         'lambda_dist_lr': 0.1,    # Learning rate for λ_dist(t) update (dual ascent step size)
         
         # ========== Cosine Similarity Constraint Parameters (TWO-SIDED with TWO multipliers) ==========
-        'use_cosine_similarity_constraint': True,  # Whether to enable cosine similarity constraints (bool, True/False)
+        'use_cosine_similarity_constraint': False,  # Whether to enable cosine similarity constraints (bool, True/False)
         'lambda_sim_low_init': 1,  # Initial λ_sim_low(t) value for lower bound constraint: sim_bound_low <= sim_att
         'lambda_sim_up_init': 1,   # Initial λ_sim_up(t) value for upper bound constraint: sim_att <= sim_bound_up
         'lambda_sim_low_lr': 0.1,    # Learning rate for λ_sim_low(t) update
@@ -715,7 +715,6 @@ def main():
         'enable_defense': False,  # Whether to enable defense mechanism (bool, True/False) Fasle for attack baseline experiment.
                                     # Note: When False, defense filtering is disabled but Cosine Similarity and Euclidean Distance are still computed for visualization
         'defense_threshold': 0.1,  # Base threshold for defense mechanism (float, lower = more strict)
-            # Set to 0 for attack baseline experiment. Baseline 0.3
         'tolerance_factor': 3.0,  # Tolerance factor for defense mechanism (float, higher = more lenient). Baseline experiment uses 3.0.
         'defense_high_rejection_threshold': 0.4,  # High rejection rate threshold for adaptive defense (float, 0.0-1.0)
         'defense_threshold_decay': 0.9,  # Decay factor for defense threshold when high rejection detected (float, 0.0-1.0)
