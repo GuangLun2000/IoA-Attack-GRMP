@@ -587,38 +587,6 @@ def analyze_results(metrics):
         print(f"Best Clean Accuracy: {max(clean):.4f}")
         print(f"Accuracy Change: {clean[-1] - clean[0]:+.4f}")
 
-def run_no_attack_experiment(config_base: Dict) -> Dict:
-    """
-    Run a baseline experiment WITHOUT any attackers.
-    
-    Args:
-        config_base: Base configuration dictionary
-        
-    Returns:
-        Dictionary with experiment results
-    """
-    # Create a copy of config with no attackers
-    config = config_base.copy()
-    config['experiment_name'] = config_base.get('experiment_name', 'baseline') + '_no_attack'
-    num_benign_in_attack = config_base['num_clients'] - config_base.get('num_attackers', 0)
-    if 'num_benign_clients' in config_base and config_base['num_benign_clients'] is not None:
-        config['num_clients'] = config_base['num_benign_clients']
-    else:
-        config['num_clients'] = num_benign_in_attack
-    
-    config['num_attackers'] = 0  # No attackers
-    
-    print("\n" + "=" * 60)
-    print("Running BASELINE Experiment (NO ATTACK)")
-    print("=" * 60)
-    print(f"Baseline will use {config['num_clients']} benign clients")
-    print(f"(matching {num_benign_in_attack} benign clients in attack experiment)")
-    print("This ensures fair comparison by controlling variables.")
-    print("=" * 60)
-    
-    return run_experiment(config)
-
-
 def main():
     config = {
         # ========== Experiment Configuration ==========
@@ -670,7 +638,7 @@ def main():
         # ========== VGAE Training Parameters ==========
         # Reference paper: input_dim=5, hidden1_dim=32, hidden2_dim=16, num_epoch=10, lr=0.01
         # Note: dim_reduction_size should be <= total trainable parameters
-        'dim_reduction_size': 1000,  # Reduced dimensionality of LLM parameters (auto-adjusted for LoRA if needed)
+        'dim_reduction_size': 10000,  # Reduced dimensionality of LLM parameters (auto-adjusted for LoRA if needed)
         'vgae_epochs': 20,  # Number of epochs for VGAE training (reference: 10)
         'vgae_lr': 0.01,  # Learning rate for VGAE optimizer (reference: 0.01)
         'vgae_hidden_dim': 32,  # VGAE hidden layer dimension (per paper: hidden1_dim=32)
@@ -721,96 +689,16 @@ def main():
         
         # ========== Visualization ==========
         'generate_plots': True,  # Whether to generate visualization plots (bool)
-        'run_both_experiments': False,  # Set to True to run baseline + attack experiments
     }
 
-
-    # Run experiments based on configuration
-    if config.get('run_both_experiments', False):
-        # Run both baseline (no attack) and attack experiments for comparison
-        print("\n" + "=" * 60)
-        print("Running COMPLETE Experiment Suite")
-        print("=" * 60)
-        print("This will run:")
-        print("  1. Baseline experiment (no attack)")
-        print("  2. Attack experiment (with GRMP) - for Figures 3, 4, 6")
-        print("=" * 60)
-        
-        # Run baseline (no attack) experiment first
-        print("\n" + "=" * 60)
-        print("Step 1: Running BASELINE Experiment (NO ATTACK)")
-        print("=" * 60)
-        baseline_results, baseline_metrics = run_no_attack_experiment(config)
-        analyze_results(baseline_metrics)
-        
-        # Run attack experiment
-        print("\n" + "=" * 60)
-        print("Step 2: Running ATTACK Experiment (with GRMP)")
-        print("=" * 60)
-        # Temporarily disable plot generation in run_experiment to avoid duplicate generation
-        # We'll generate all plots at the end with baseline data available
-        plot_setting = config.get('generate_plots', True)
-        config['generate_plots'] = False  # Disable plots in individual run
-        attack_results, attack_metrics = run_experiment(config)
-        config['generate_plots'] = plot_setting  # Restore original setting
-        
-        # Generate combined visualizations with baseline data available
-        if plot_setting:
-            from visualization import ExperimentVisualizer
-            from pathlib import Path
-            
-            results_dir = Path("results")
-            visualizer = ExperimentVisualizer(results_dir=results_dir)
-            
-            # Calculate attacker IDs from config
-            num_clients = config['num_clients']
-            num_attackers = config['num_attackers']
-            attacker_ids = list(range(num_clients - num_attackers, num_clients))
-            
-            print("\n" + "=" * 60)
-            print("Generating Combined Visualizations")
-            print("=" * 60)
-            
-            # Load attack experiment results for Figures 3, 4, 6
-            attack_path = results_dir / f"{config['experiment_name']}_results.json"
-            attack_local_accs = None
-            if attack_path.exists():
-                try:
-                    with open(attack_path, 'r') as f:
-                        attack_data = json.load(f)
-                    attack_local_accs = attack_data.get('local_accuracies', None)
-                    if attack_local_accs:
-                        print("  ✓ Found attack experiment data")
-                except Exception as e:
-                    print(f"  ⚠️  WARNING: Could not load attack data: {e}")
-                    
-                    # Generate Figures 3, 4, 6
-            if attack_local_accs:
-                    visualizer.generate_all_figures(
-                        server_log_data=attack_results,
-                        local_accuracies=attack_local_accs,
-                        attacker_ids=attacker_ids,
-                    experiment_name=config['experiment_name'],
-                    num_rounds=config['num_rounds'],
-                    attack_start_round=config['attack_start_round'],
-                    num_clients=config['num_clients'],
-                    num_attackers=config['num_attackers']
-                    )
-        
-        analyze_results(attack_metrics)
-        print("\n" + "=" * 60)
-        print("Experiment Suite Complete!")
-        print("=" * 60)
-    
+    # Run experiment (attack if num_attackers > 0, baseline if num_attackers == 0)
+    if config.get('num_attackers', 0) > 0:
+        print("Running GRMP Attack with VGAE...")
     else:
-        # Default: Run single experiment (attack if num_attackers > 0, baseline if num_attackers == 0)
-        if config.get('num_attackers', 0) > 0:
-            print("Running GRMP Attack with VGAE...")
-        else:
-            print("Running Baseline Experiment (No Attack)...")
-        
-        results, metrics = run_experiment(config)
-        analyze_results(metrics)
+        print("Running Baseline Experiment (No Attack)...")
+    
+    results, metrics = run_experiment(config)
+    analyze_results(metrics)
         
 
 if __name__ == "__main__":
