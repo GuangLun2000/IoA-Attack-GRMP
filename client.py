@@ -1613,8 +1613,10 @@ class AttackerClient(Client):
         device = malicious_update.device
         
         # ===== NEW: Include other attackers' updates for coordinated optimization =====
+        # CRITICAL: Do NOT shadow the input parameter other_attacker_updates_list
+        # Use a different name for the local accumulator
         other_attacker_weights = []
-        other_attacker_updates_list = []
+        other_updates_to_use = []  # Local accumulator, NOT shadowing input
         if other_attacker_updates_gpu is not None and len(other_attacker_updates_gpu) > 0:
             # Use GPU versions
             for idx, cid in enumerate(self.other_attacker_client_ids):
@@ -1624,10 +1626,10 @@ class AttackerClient(Client):
                     else:
                         D_j = float(self.claimed_data_size)
                     other_attacker_weights.append(D_j)
-                    other_attacker_updates_list.append(other_attacker_updates_gpu[idx])
+                    other_updates_to_use.append(other_attacker_updates_gpu[idx])
                     D_sum += D_j
         elif other_attacker_updates_list is not None and len(other_attacker_updates_list) > 0:
-            # Use provided CPU versions
+            # Use provided input parameter (CPU versions)
             for idx, cid in enumerate(self.other_attacker_client_ids):
                 if idx < len(other_attacker_updates_list):
                     if hasattr(self, 'other_attacker_data_sizes') and cid in self.other_attacker_data_sizes:
@@ -1635,7 +1637,7 @@ class AttackerClient(Client):
                     else:
                         D_j = float(self.claimed_data_size)
                     other_attacker_weights.append(D_j)
-                    other_attacker_updates_list.append(other_attacker_updates_list[idx])
+                    other_updates_to_use.append(other_attacker_updates_list[idx])  # Use INPUT parameter
                     D_sum += D_j
         elif hasattr(self, 'other_attacker_updates') and self.other_attacker_updates:
             # Fallback to stored CPU versions
@@ -1646,7 +1648,7 @@ class AttackerClient(Client):
                     else:
                         D_j = float(self.claimed_data_size)
                     other_attacker_weights.append(D_j)
-                    other_attacker_updates_list.append(self.other_attacker_updates[idx])
+                    other_updates_to_use.append(self.other_attacker_updates[idx])
                     D_sum += D_j
         # ==============================================================================
         
@@ -1683,7 +1685,7 @@ class AttackerClient(Client):
         # ===== NEW: Add other attackers' updates =====
         # CRITICAL: In optimization loop, GPU versions are pre-transferred to target_device
         # For final check (after GPU cleanup), allow device conversion to match malicious_update
-        for w, other_attacker_update in zip(w_other_att, other_attacker_updates_list):
+        for w, other_attacker_update in zip(w_other_att, other_updates_to_use):
             # In optimization loop: strict device check (GPU versions should match)
             # After optimization: allow conversion (final check uses CPU versions)
             if other_attacker_update.device != device:
@@ -1980,38 +1982,6 @@ class AttackerClient(Client):
             skip_dim_check=True,
             keep_model_on_gpu=True
         )
-    
-    def _compute_distance_update_space(self, malicious_update: torch.Tensor,
-                                        benign_updates: List[torch.Tensor] = None,
-                                        benign_updates_gpu: List[torch.Tensor] = None,
-                                        other_attacker_updates_gpu: List[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Compute distance in UPDATE space: d(Δ_att, Δ_g) = ||Δ_att - Δ_g||.
-        
-        This is the correct constraint interpretation:
-        - w'_j = w_g + Δ_att
-        - w'_g = w_g + Δ_g
-        => d(w'_j, w'_g) = ||Δ_att - Δ_g||
-        
-        Args:
-            malicious_update: Δ_att (attacker's update, should be on target device)
-            benign_updates: List of benign updates (CPU, fallback)
-            benign_updates_gpu: List of benign updates (GPU, preferred)
-            other_attacker_updates_gpu: List of other attacker updates (GPU, preferred)
-        
-        Returns:
-            distance: ||Δ_att - Δ_g||
-            aggregated_update: Δ_g (for reuse)
-        """
-        aggregated_update, _, _ = self._aggregate_update_no_beta(
-            malicious_update,
-            benign_updates=benign_updates,
-            benign_updates_gpu=benign_updates_gpu,
-            other_attacker_updates_gpu=other_attacker_updates_gpu
-        )
-        diff = malicious_update.view(-1) - aggregated_update.view(-1)
-        distance = torch.norm(diff)
-        return distance, aggregated_update
     
     def _compute_real_distance_to_global(self, malicious_update: torch.Tensor,
                                          benign_updates: List[torch.Tensor],
@@ -2601,7 +2571,7 @@ class AttackerClient(Client):
                 # - NO quadratic penalty term (this is standard Lagrangian, NOT Augmented Lagrangian)
                 # ============================================================
                 # Use pre-converted dist_bound_val (converted before loop to avoid repeated conversion)
-                g_dist = dist_att_to_agg - dist_bound_val if dist_bound_val is not None else torch.tensor(0.0, device=self.device)
+                g_dist = dist_att_to_agg - dist_bound_val if dist_bound_val is not None else torch.tensor(0.0, device=target_device)
                 
                 # Standard Lagrangian distance term (NO ReLU here)
                 # dist_lagr_term = λ_dist * g_dist
@@ -2613,7 +2583,7 @@ class AttackerClient(Client):
                 # Lower bound constraint: g_sim_low = sim_bound_low - sim_att <= 0
                 # Upper bound constraint: g_sim_up = sim_att - sim_bound_up <= 0
                 # ============================================================
-                sim_lagr_term = torch.tensor(0.0, device=self.device)
+                sim_lagr_term = torch.tensor(0.0, device=target_device)
                 if self.use_cosine_similarity_constraint and cached_benign_sim_stats is not None:
                     # Compute attacker similarity to aggregated update
                     # CRITICAL: Use GPU versions to avoid device transfers and maintain computation graph
@@ -2678,7 +2648,9 @@ class AttackerClient(Client):
                 # Compute constraint violations (for dual ascent updates, using ReLU)
                 # ============================================================
                 # Distance constraint violation (for updating λ_dist)
-                constraint_dist_violation = F.relu(g_dist) if self.dist_bound is not None else torch.tensor(0.0, device=self.device)
+                # CRITICAL: Check dist_bound_val (effective bound) not self.dist_bound
+                has_dist_bound = (dist_bound_val is not None)
+                constraint_dist_violation = F.relu(g_dist) if has_dist_bound else torch.tensor(0.0, device=target_device)
                 
             else:
                 # ========== Use hard constraint mechanism (Lagrangian disabled) ==========
@@ -2700,8 +2672,8 @@ class AttackerClient(Client):
                     )
                     constraint_dist_violation = F.relu(dist_att_to_agg - dist_bound_val_hc)
                 else:
-                    dist_att_to_agg = torch.tensor(0.0, device=self.device)
-                    constraint_dist_violation = torch.tensor(0.0, device=self.device)
+                    dist_att_to_agg = torch.tensor(0.0, device=target_device)
+                    constraint_dist_violation = torch.tensor(0.0, device=target_device)
                 
             
             # ============================================================
