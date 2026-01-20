@@ -2255,17 +2255,15 @@ class AttackerClient(Client):
         # Select a vector from F̂ as the malicious update
         # Paper: "vectors w'_j(t) in F̂ are selected as malicious local models"
         # 
-        # IMPROVEMENT: Select the row with highest similarity to benign aggregate
-        # This ensures the GSP-generated update is well-aligned with benign updates,
-        # reducing the likelihood of orthogonal vectors that cause optimization instability
+        # BALANCED STRATEGY: Filter out vectors with very low similarity (avoid orthogonal),
+        # then select from valid candidates based on client_id for diversity.
+        # This balances between avoiding optimization instability and maintaining attack effectiveness.
         # 
         # Compute benign aggregate (mean of benign feature matrix) as reference
-        # This represents the "center" of benign updates in the reduced space
         benign_aggregate = feature_matrix.mean(dim=0)  # (M,) - mean of all benign updates in reduced space
         benign_aggregate_flat = benign_aggregate.view(-1)  # Ensure 1D
         
         # Compute cosine similarity for each row in F_recon with benign aggregate
-        # Use batch computation for efficiency (all rows at once)
         F_recon_flat = F_recon.view(F_recon_rows, -1)  # (I, M) - ensure 2D
         benign_aggregate_expanded = benign_aggregate_flat.unsqueeze(0).expand(F_recon_rows, -1)  # (I, M)
         
@@ -2276,18 +2274,34 @@ class AttackerClient(Client):
             dim=1
         )  # (I,) - similarity for each row
         
-        # Select the row with highest similarity to benign aggregate
-        select_idx = int(torch.argmax(similarities_tensor).item())
-        max_sim = similarities_tensor[select_idx].item()
+        # Filter strategy: exclude vectors with very low similarity (e.g., < 0.0) to avoid orthogonal vectors
+        # But allow selection from a range of similarities for better attack effectiveness
+        similarity_threshold = -0.5  # Allow negative similarities but filter out very orthogonal ones
+        valid_mask = similarities_tensor >= similarity_threshold
+        valid_indices = torch.where(valid_mask)[0].tolist()
+        
+        if len(valid_indices) > 0:
+            # Select from valid candidates based on client_id for diversity
+            # This ensures different attackers may choose different vectors while avoiding orthogonal ones
+            select_idx = valid_indices[int(self.client_id) % len(valid_indices)]
+            selected_sim = similarities_tensor[select_idx].item()
+            selection_strategy = "filtered_by_similarity"
+        else:
+            # Fallback: if all vectors are too orthogonal, select the one with highest similarity
+            select_idx = int(torch.argmax(similarities_tensor).item())
+            selected_sim = similarities_tensor[select_idx].item()
+            selection_strategy = "fallback_max_similarity"
         
         # Log selection details
         min_sim = similarities_tensor.min().item()
         mean_sim = similarities_tensor.mean().item()
-        print(f"    [Attacker {self.client_id}] Selected F_recon[{select_idx}] with similarity={max_sim:.4f} to benign aggregate")
-        print(f"    [Attacker {self.client_id}] Similarity stats: min={min_sim:.4f}, mean={mean_sim:.4f}, max={max_sim:.4f} (among {F_recon_rows} rows)")
+        max_sim = similarities_tensor.max().item()
+        valid_count = len(valid_indices) if len(valid_indices) > 0 else F_recon_rows
+        print(f"    [Attacker {self.client_id}] Selected F_recon[{select_idx}] with similarity={selected_sim:.4f} (strategy: {selection_strategy})")
+        print(f"    [Attacker {self.client_id}] Similarity stats: min={min_sim:.4f}, mean={mean_sim:.4f}, max={max_sim:.4f}, valid={valid_count}/{F_recon_rows} (threshold={similarity_threshold:.2f})")
         
         gsp_attack = F_recon[select_idx].clone()  # Select one row from F̂ as w'_j(t), clone to avoid view issues
-        # Note: Selected based on highest similarity to benign aggregate to avoid orthogonal vectors
+        # Note: Selected from valid candidates (similarity >= threshold) based on client_id for diversity
         
         # Ensure gsp_attack is 1D tensor (not scalar)
         gsp_dim_count = int(gsp_attack.dim())  # Convert to Python int
