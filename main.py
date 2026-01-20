@@ -594,7 +594,7 @@ def main():
         'seed': 42,  # Random seed for reproducibility (int), 42 is the default
         
         # ========== Federated Learning Setup ==========
-        'num_clients': 1,  # Total number of federated learning clients (int)
+        'num_clients': 2,  # Total number of federated learning clients (int)
         'num_attackers': 1,  # Number of attacker clients (int, must be < num_clients)
         'num_benign_clients': None,  # Optional: Explicit number of benign clients for baseline experiment
                                     # If None, baseline will use (num_clients - num_attackers) to ensure fair comparison
