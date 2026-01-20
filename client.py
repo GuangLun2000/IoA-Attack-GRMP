@@ -246,7 +246,9 @@ class AttackerClient(Client):
                  vgae_dropout=0.0,
                  proxy_steps=20,
                  grad_clip_norm=1.0,
-                 early_stop_constraint_stability_steps=3):
+                 early_stop_constraint_stability_steps=3,
+                 use_gat=False,
+                 gat_num_heads=4):
         """
         Initialize an attacker client with VGAE-based camouflage capabilities.
         
@@ -295,6 +297,8 @@ class AttackerClient(Client):
         self.proxy_steps = proxy_steps
         self.grad_clip_norm = grad_clip_norm
         self.early_stop_constraint_stability_steps = early_stop_constraint_stability_steps
+        self.use_gat = use_gat
+        self.gat_num_heads = gat_num_heads
 
         dummy_loader = data_manager.get_empty_loader()
         super().__init__(client_id, model, dummy_loader, lr, local_epochs, alpha)
@@ -1372,7 +1376,8 @@ class AttackerClient(Client):
             
             # Use configured VGAE architecture parameters (per paper: hidden1_dim=32, hidden2_dim=16)
             self.vgae = VGAE(input_dim=input_dim, hidden_dim=self.vgae_hidden_dim, 
-                            latent_dim=self.vgae_latent_dim, dropout=self.vgae_dropout).to(self.device)
+                            latent_dim=self.vgae_latent_dim, dropout=self.vgae_dropout,
+                            use_gat=self.use_gat, gat_num_heads=self.gat_num_heads).to(self.device)
             self.vgae_optimizer = optim.Adam(self.vgae.parameters(), lr=self.vgae_lr)
             
             # Restore random state to avoid affecting other random number generation

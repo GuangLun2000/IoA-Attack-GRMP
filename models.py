@@ -235,6 +235,9 @@ class GraphConvolutionLayer(nn.Module):
     """
     Simple Graph Convolution Layer (GCN).
     Formula: Output = A * X * W + b
+    
+    Time Complexity: O(|V|·F·F' + |E|·F')
+    where |V| = nodes, F = input features, F' = output features, |E| = edges
     """
     def __init__(self, in_features: int, out_features: int):
         super().__init__()
@@ -260,40 +263,239 @@ class GraphConvolutionLayer(nn.Module):
         return output
 
 
+class GraphAttentionLayer(nn.Module):
+    """
+    Graph Attention Layer (GAT) with multi-head attention.
+    
+    Formula: h_i' = ||_{k=1}^K σ(Σ_{j∈N_i} α_{ij}^k W^k h_j)
+    where α_{ij} = softmax(LeakyReLU(a^T [Wh_i || Wh_j]))
+    
+    Time Complexity: O(K·(|V|·F·F' + |E|·F'))
+    where K = num_heads, |V| = nodes, F = input features, F' = output features per head, |E| = edges
+    
+    Compared to GCN:
+    - Additional cost: K× for multi-head, attention computation per edge
+    - Memory: K× feature storage, attention coefficients per edge
+    - Typically 2-8× slower than GCN depending on graph density and K
+    """
+    def __init__(self, in_features: int, out_features: int, num_heads: int = 4, 
+                 dropout: float = 0.1, alpha: float = 0.2, concat: bool = True):
+        """
+        Args:
+            in_features: Input feature dimension
+            out_features: Output feature dimension per head
+            num_heads: Number of attention heads (K, default: 4 for efficiency)
+            dropout: Dropout rate for attention coefficients
+            alpha: Negative slope for LeakyReLU
+            concat: If True, concatenate heads; if False, average heads
+        """
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.num_heads = num_heads
+        self.concat = concat
+        
+        # For each head: W^k (feature transformation)
+        if concat:
+            self.out_dim = num_heads * out_features
+        else:
+            self.out_dim = out_features
+        
+        # Weight matrix for each head: W^k (num_heads, in_features, out_features)
+        self.W = nn.Parameter(torch.FloatTensor(num_heads, in_features, out_features))
+        
+        # Attention mechanism: a^k (learnable attention vector for each head)
+        self.a = nn.Parameter(torch.FloatTensor(num_heads, 2 * out_features, 1))
+        
+        self.dropout = nn.Dropout(dropout)
+        self.leaky_relu = nn.LeakyReLU(alpha)
+        
+        self.reset_parameters()
+    
+    def reset_parameters(self):
+        """Initialize parameters."""
+        nn.init.xavier_uniform_(self.W)
+        nn.init.xavier_uniform_(self.a)
+    
+    def forward(self, x: torch.Tensor, adj: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: Node features (|V|, in_features)
+            adj: Adjacency matrix (|V|, |V|) - binary or weighted
+        
+        Returns:
+            Output features (|V|, out_dim)
+        """
+        N = x.size(0)  # Number of nodes
+        
+        # Transform features for each head: Wh for each head
+        # x: (N, in_features), W: (num_heads, in_features, out_features)
+        # h: (N, num_heads, out_features)
+        h = torch.stack([torch.mm(x, self.W[k]) for k in range(self.num_heads)], dim=1)
+        
+        # Compute attention scores for all pairs and heads
+        # For each head k and pair (i, j): a^T [h_i^k || h_j^k]
+        # h: (N, num_heads, out_features)
+        # We'll compute efficiently using broadcasting
+        
+        # Prepare for pairwise computation
+        # h_i: (N, num_heads, 1, out_features)
+        # h_j: (1, num_heads, N, out_features)
+        h_i = h.unsqueeze(2)  # (N, num_heads, 1, out_features)
+        h_j = h.unsqueeze(0)  # (1, num_heads, N, out_features)
+        
+        # Broadcast to get all pairs: (N, num_heads, N, out_features)
+        h_i_expanded = h_i.expand(N, self.num_heads, N, self.out_features)
+        h_j_expanded = h_j.expand(N, self.num_heads, N, self.out_features)
+        
+        # Concatenate: [h_i || h_j] -> (N, num_heads, N, 2*out_features)
+        h_concat = torch.cat([h_i_expanded, h_j_expanded], dim=-1)
+        
+        # Compute attention scores: a^T [h_i || h_j] for all heads
+        # h_concat: (N, num_heads, N, 2*out_features)
+        # a: (num_heads, 2*out_features, 1)
+        attention_scores = torch.zeros(N, self.num_heads, N, device=x.device, dtype=x.dtype)
+        for k in range(self.num_heads):
+            # For head k: compute a[k]^T @ h_concat[:, k, :, :]
+            # h_concat[:, k, :, :]: (N, N, 2*out_features)
+            # a[k]: (2*out_features, 1)
+            scores_k = torch.matmul(h_concat[:, k, :, :], self.a[k])  # (N, N, 1)
+            attention_scores[:, k, :] = scores_k.squeeze(-1)  # (N, N)
+        
+        attention_scores = self.leaky_relu(attention_scores)
+        
+        # Mask out non-adjacent nodes (set to -inf before softmax)
+        # adj: (N, N) -> (1, 1, N, N) for broadcasting
+        adj_mask = adj.unsqueeze(0).unsqueeze(0)  # (1, 1, N, N)
+        attention_scores = attention_scores.unsqueeze(2)  # (N, num_heads, 1, N)
+        attention_scores = attention_scores.masked_fill(adj_mask == 0, float('-inf'))
+        attention_scores = attention_scores.squeeze(2)  # (N, num_heads, N)
+        
+        # Apply softmax to get attention coefficients
+        attention_coeffs = F.softmax(attention_scores, dim=-1)  # (N, num_heads, N)
+        attention_coeffs = self.dropout(attention_coeffs)
+        
+        # Aggregate neighbors: Σ_j α_{ij}^k * h_j^k for each head k
+        # h: (N, num_heads, out_features)
+        # attention_coeffs: (N, num_heads, N)
+        h_aggregated = torch.zeros(N, self.num_heads, self.out_features, device=x.device, dtype=x.dtype)
+        for k in range(self.num_heads):
+            # attention_coeffs[:, k, :]: (N, N) - attention from each node to each node for head k
+            # h[:, k, :]: (N, out_features) - features for head k
+            h_aggregated[:, k, :] = torch.matmul(attention_coeffs[:, k, :], h[:, k, :])  # (N, out_features)
+        
+        # Concatenate or average heads
+        if self.concat:
+            # Concatenate: (N, num_heads * out_features)
+            output = h_aggregated.contiguous().view(N, self.out_dim)
+        else:
+            # Average: (N, out_features)
+            output = h_aggregated.mean(dim=1)
+        
+        return output
+
+
 class VGAE(nn.Module):
     """
     Variational Graph Autoencoder (VGAE) for GRMP attack.
     
     This model learns the relational structure among benign updates (as a graph)
     to generate adversarial gradients that mimic legitimate patterns.
+    
+    Supports both GCN and GAT architectures:
+    - GCN: Faster, simpler, fixed neighbor aggregation
+    - GAT: More expressive, learns neighbor importance, but 2-8× slower
     """
 
-    def __init__(self, input_dim: int, hidden_dim: int = 64, latent_dim: int = 32, dropout: float = 0.2):
+    def __init__(self, input_dim: int, hidden_dim: int = 64, latent_dim: int = 32, 
+                 dropout: float = 0.2, use_gat: bool = False, gat_num_heads: int = 4):
+        """
+        Args:
+            input_dim: Input feature dimension (number of clients I)
+            hidden_dim: Hidden layer dimension
+            latent_dim: Latent space dimension
+            dropout: Dropout rate
+            use_gat: If True, use GAT layers; if False, use GCN layers (default: False)
+            gat_num_heads: Number of attention heads for GAT (only used if use_gat=True)
+        """
         super().__init__()
         
         self.input_dim = input_dim
+        self.use_gat = use_gat
         
         # --- Encoder Layers ---
-        self.gc1 = GraphConvolutionLayer(input_dim, hidden_dim)
-        self.gc2_mu = GraphConvolutionLayer(hidden_dim, latent_dim)
-        self.gc2_logvar = GraphConvolutionLayer(hidden_dim, latent_dim)
+        if use_gat:
+            # GAT architecture: more expressive but slower
+            # Note: GAT output dimension = num_heads * out_features (if concat=True)
+            # For first layer: input_dim -> hidden_dim (total, will be split across heads)
+            # We need to ensure hidden_dim is divisible by num_heads
+            gat_hidden_per_head = hidden_dim // gat_num_heads
+            if gat_hidden_per_head * gat_num_heads != hidden_dim:
+                # Round down to ensure divisibility
+                gat_hidden_per_head = hidden_dim // gat_num_heads
+                # Adjust hidden_dim to be divisible (may be slightly smaller)
+                actual_hidden_dim = gat_hidden_per_head * gat_num_heads
+                if actual_hidden_dim != hidden_dim:
+                    print(f"  Warning: GAT hidden_dim adjusted from {hidden_dim} to {actual_hidden_dim} "
+                          f"to be divisible by {gat_num_heads} heads")
+                    hidden_dim = actual_hidden_dim
+            
+            self.gc1 = GraphAttentionLayer(input_dim, gat_hidden_per_head, 
+                                           num_heads=gat_num_heads, dropout=dropout, concat=True)
+            # Second layer: hidden_dim (from gc1 output) -> latent_dim (total, will be split across heads)
+            gat_latent_per_head = latent_dim // gat_num_heads
+            if gat_latent_per_head * gat_num_heads != latent_dim:
+                # Round down to ensure divisibility
+                gat_latent_per_head = latent_dim // gat_num_heads
+                # Adjust latent_dim to be divisible (may be slightly smaller)
+                actual_latent_dim = gat_latent_per_head * gat_num_heads
+                if actual_latent_dim != latent_dim:
+                    print(f"  Warning: GAT latent_dim adjusted from {latent_dim} to {actual_latent_dim} "
+                          f"to be divisible by {gat_num_heads} heads")
+                    latent_dim = actual_latent_dim
+            
+            # gc1 outputs: (N, hidden_dim) where hidden_dim = num_heads * gat_hidden_per_head
+            # gc2 inputs: (N, hidden_dim)
+            self.gc2_mu = GraphAttentionLayer(hidden_dim, gat_latent_per_head,
+                                             num_heads=gat_num_heads, dropout=dropout, concat=True)
+            self.gc2_logvar = GraphAttentionLayer(hidden_dim, gat_latent_per_head,
+                                                  num_heads=gat_num_heads, dropout=dropout, concat=True)
+        else:
+            # GCN architecture: faster and simpler (default)
+            self.gc1 = GraphConvolutionLayer(input_dim, hidden_dim)
+            self.gc2_mu = GraphConvolutionLayer(hidden_dim, latent_dim)
+            self.gc2_logvar = GraphConvolutionLayer(hidden_dim, latent_dim)
 
         self.dropout = nn.Dropout(dropout)
 
     def encode(self, x: torch.Tensor, adj: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Encodes input features and adjacency matrix into latent distribution parameters."""
         
-        # Normalize adjacency matrix (symmetric normalization)
-        adj_norm = self._normalize_adj(adj)
-
-        # Layer 1: GCN + ReLU + Dropout
-        hidden = self.gc1(x, adj_norm)
-        hidden = F.relu(hidden)
-        hidden = self.dropout(hidden)
-
-        # Layer 2: Output Mean and Log Variance
-        mu = self.gc2_mu(hidden, adj_norm)
-        logvar = self.gc2_logvar(hidden, adj_norm)
+        if self.use_gat:
+            # GAT: No need for symmetric normalization, uses attention mechanism directly
+            # But we still add self-loops for attention computation
+            adj_with_loop = adj + torch.eye(adj.size(0), device=adj.device)
+            
+            # Layer 1: GAT + ELU (GAT typically uses ELU) + Dropout
+            hidden = self.gc1(x, adj_with_loop)
+            hidden = F.elu(hidden)  # GAT typically uses ELU instead of ReLU
+            hidden = self.dropout(hidden)
+            
+            # Layer 2: Output Mean and Log Variance
+            mu = self.gc2_mu(hidden, adj_with_loop)
+            logvar = self.gc2_logvar(hidden, adj_with_loop)
+        else:
+            # GCN: Normalize adjacency matrix (symmetric normalization)
+            adj_norm = self._normalize_adj(adj)
+            
+            # Layer 1: GCN + ReLU + Dropout
+            hidden = self.gc1(x, adj_norm)
+            hidden = F.relu(hidden)
+            hidden = self.dropout(hidden)
+            
+            # Layer 2: Output Mean and Log Variance
+            mu = self.gc2_mu(hidden, adj_norm)
+            logvar = self.gc2_logvar(hidden, adj_norm)
         
         return mu, logvar
 

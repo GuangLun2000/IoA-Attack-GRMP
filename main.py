@@ -216,7 +216,9 @@ def setup_experiment(config):
                 vgae_dropout=config['vgae_dropout'],
                 proxy_steps=config['proxy_steps'],
                 grad_clip_norm=config['grad_clip_norm'],
-                early_stop_constraint_stability_steps=config.get('early_stop_constraint_stability_steps', 3)
+                early_stop_constraint_stability_steps=config.get('early_stop_constraint_stability_steps', 3),
+                use_gat=config.get('use_gat', False),
+                gat_num_heads=config.get('gat_num_heads', 4)
             )
             
             # Set Lagrangian Dual parameters (if using)
@@ -596,7 +598,7 @@ def main():
         'alpha': 0.05,  # Proximal regularization coefficient α ∈ [0,1] (float)
         
         # ========== Data Distribution ==========
-        'dirichlet_alpha': 10,  # Make data less extreme non-IID (higher alpha = more balanced)
+        'dirichlet_alpha': 0.3,  # Make data less extreme non-IID (higher alpha = more balanced)
         # 'dataset_size_limit': None,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
         'dataset_size_limit': 20000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
         # 'dataset_size_limit': 10000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
@@ -624,15 +626,19 @@ def main():
         # ========== VGAE Training Parameters ==========
         # Reference paper: input_dim=5, hidden1_dim=32, hidden2_dim=16, num_epoch=10, lr=0.01
         # Note: dim_reduction_size should be <= total trainable parameters
-        'dim_reduction_size': 10000,  # Reduced dimensionality of LLM parameters (auto-adjusted for LoRA if needed)
+        'dim_reduction_size': 20000,  # Reduced dimensionality of LLM parameters (auto-adjusted for LoRA if needed)
         'vgae_epochs': 20,  # Number of epochs for VGAE training (reference: 10)
         'vgae_lr': 0.01,  # Learning rate for VGAE optimizer (reference: 0.01)
         'vgae_hidden_dim': 32,  # VGAE hidden layer dimension (per paper: hidden1_dim=32)
         'vgae_latent_dim': 16,  # VGAE latent space dimension (per paper: hidden2_dim=16)
         'vgae_dropout': 0.1,  # VGAE dropout rate (float, 0.0-1.0)
         
+        # ========== VGAE Architecture Selection ==========
+        'use_gat': True,  # If True, use GAT (Graph Attention Network) instead of GCN (default: False)
+        'gat_num_heads': 4,  # Number of attention heads for GAT (only used if use_gat=True, default: 4)
+        
         # ========== Attack Optimization Parameters ==========
-        'proxy_step': 0.01,  # Step size for gradient-free ascent toward global-loss proxy
+        'proxy_step': 0.1,  # Step size for gradient-free ascent toward global-loss proxy
         'proxy_steps': 100,  # Number of optimization steps for attack objective (int)
         'grad_clip_norm': 1.0,  # Gradient clipping norm for training stability (float)
         'attacker_claimed_data_size': None,  # None = use actual assigned data size
