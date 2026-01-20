@@ -2027,8 +2027,10 @@ class AttackerClient(Client):
         For each update Δ_i, compute cosine_similarity(Δ_i, Δ_ref),
         where Δ_ref is the provided aggregated reference update.
         
-        CRITICAL: For stable optimization, the reference should NOT include the current attacker.
-        This avoids circular dependency where updating proxy_param changes the reference point.
+        CRITICAL: 
+        1. For stable optimization, the reference should NOT include the current attacker.
+        2. Only benign clients are used for statistics calculation (other attackers are excluded).
+           This ensures clean baseline for threshold calculation.
         
         Args:
             benign_updates: List of all benign updates Δ_i
@@ -2036,7 +2038,7 @@ class AttackerClient(Client):
                            Should NOT include current attacker for stable optimization
         
         Returns:
-            Dictionary with statistics: mean, std, min, max, median
+            Dictionary with statistics: mean, std, min, max, median (computed from benign clients only)
         """
         # Use provided reference or compute from benign updates only
         if aggregated_ref is None:
@@ -2045,10 +2047,10 @@ class AttackerClient(Client):
         aggregated_flat = aggregated_ref.view(-1)
         device = aggregated_flat.device
         
-        # Collect all updates to compute statistics (benign + other attackers if available)
+        # Collect updates to compute statistics (ONLY benign clients, excluding other attackers)
+        # CRITICAL: Only use benign clients for threshold calculation to ensure clean baseline
         all_updates = benign_updates.copy()
-        if hasattr(self, 'other_attacker_updates') and self.other_attacker_updates is not None:
-            all_updates.extend(self.other_attacker_updates)
+        # NOTE: other_attacker_updates are explicitly excluded from statistics calculation
         
         if len(all_updates) == 0:
             # Return dummy statistics if no updates
@@ -2100,8 +2102,10 @@ class AttackerClient(Client):
         For each update Δ_i, compute distance ||Δ_i - Δ_ref||,
         where Δ_ref is the provided reference aggregated update.
         
-        CRITICAL: For stable optimization, the reference should NOT include the current attacker.
-        This avoids circular dependency where updating proxy_param changes the reference point.
+        CRITICAL: 
+        1. For stable optimization, the reference should NOT include the current attacker.
+        2. Only benign clients are used for statistics calculation (other attackers are excluded).
+           This ensures clean baseline for threshold calculation.
         
         Args:
             benign_updates: List of all benign updates Δ_i
@@ -2111,7 +2115,7 @@ class AttackerClient(Client):
                                     will be included in aggregation; but typically should be None for stable stats)
         
         Returns:
-            Dictionary with statistics: mean, std, min, max, median
+            Dictionary with statistics: mean, std, min, max, median (computed from benign clients only)
         """
         # Compute or use provided reference update
         # CRITICAL: For stable optimization, should NOT include current attacker
@@ -2126,29 +2130,23 @@ class AttackerClient(Client):
                 )
             else:
                 # Use aggregation without current attacker (recommended for stable optimization)
+                # CRITICAL: Only use benign updates for reference aggregation (exclude other attackers)
+                # This ensures clean baseline for threshold calculation
                 benign_ref_update = self._aggregate_benign_only(benign_updates, device=None)
-                # Add other attackers if available
-                if hasattr(self, 'other_attacker_updates') and self.other_attacker_updates is not None:
-                    # Compute weighted aggregation including other attackers
-                    benign_ref_update, _, _ = self._aggregate_update_no_beta(
-                        torch.zeros_like(benign_ref_update),  # Dummy, not included
-                        benign_updates=benign_updates,
-                        other_attacker_updates_list=self.other_attacker_updates,
-                        include_current_attacker=False,
-                        device=None
-                    )
+                # NOTE: other_attacker_updates are explicitly excluded from reference aggregation
         
         aggregated_flat = benign_ref_update.view(-1)
         device = aggregated_flat.device
         
-        # Collect updates for statistics (benign + other attackers, but NOT current attacker)
-        # CRITICAL: Exclude current attacker to avoid circular dependency in statistics
+        # Collect updates for statistics (ONLY benign clients, excluding other attackers and current attacker)
+        # CRITICAL: 
+        # 1. Exclude current attacker to avoid circular dependency in statistics
+        # 2. Exclude other attackers to ensure clean baseline for threshold calculation
         all_updates = benign_updates.copy()
-        if hasattr(self, 'other_attacker_updates') and self.other_attacker_updates is not None:
-            all_updates.extend(self.other_attacker_updates)
+        # NOTE: other_attacker_updates are explicitly excluded from statistics calculation
         # NOTE: current_attacker_update is NOT included in statistics to avoid circular dependency
         
-        # Compute distance for each update (benign + other attackers, excluding current attacker)
+        # Compute distance for each update (benign clients only, excluding all attackers)
         all_distances = []
         for update in all_updates:
             update_flat = update.view(-1).to(device)
@@ -2730,33 +2728,30 @@ class AttackerClient(Client):
         
         # Cache distance statistics before loop (for automatic d_T calculation)
         # CRITICAL: Use detach() to avoid creating computation graph (statistics are for threshold calculation only)
-        # NOTE: Statistics can use global aggregation (all clients + all attackers) for threshold setting,
-        # but optimization uses aggregation WITHOUT current attacker to avoid circular dependency.
+        # NOTE: Statistics use ONLY benign clients for threshold calculation (other attackers excluded)
+        # This ensures clean baseline for threshold setting.
         # Using global_ref_cpu which excludes current attacker (consistent with optimization loop)
         if len(self.benign_updates) > 0:
             cached_benign_dist_stats = self._compute_benign_distance_statistics(
                 self.benign_updates,
-                benign_ref_update=global_ref_cpu,  # Use reference without current attacker (consistent with optimization)
+                benign_ref_update=global_ref_cpu,  # Benign-only aggregation (excludes all attackers)
                 current_attacker_update=None  # Exclude current attacker for stable statistics
             )
         else:
             cached_benign_dist_stats = None
         
         # Pre-convert dist_bound to scalar once before loop (avoid repeated conversion)
-        # If dist_bound is None, use benign statistics: mean + 2*std (more stable than max, avoids outliers)
-        # Reason: mean + 2*std provides a statistically robust threshold that covers ~97.5% of benign clients
-        # This is more lenient than mean + 1*std (~84% coverage) while still filtering extreme outliers
+        # If dist_bound is None, use benign statistics: max (largest distance among benign clients)
+        # Reason: Using max ensures all benign clients are within the threshold, providing maximum flexibility
         if self.dist_bound is not None:
             dist_bound_val = float(self.dist_bound) if isinstance(self.dist_bound, torch.Tensor) else self.dist_bound
             dist_bound_source = "manual"
         else:
             # Use benign statistics when dist_bound is None
             if cached_benign_dist_stats is not None:
-                # Use mean + 2*std (statistically robust, covers ~97.5% of benign clients, less affected by outliers)
-                benign_dist_mean = cached_benign_dist_stats['mean'].item()
-                benign_dist_std = cached_benign_dist_stats['std'].item()
-                dist_bound_val = float(benign_dist_mean + 2.0 * benign_dist_std)
-                dist_bound_source = "benign_mean_2std"
+                # Use max (largest distance among benign clients) - ensures all benign clients are within threshold
+                dist_bound_val = float(cached_benign_dist_stats['max'].item())
+                dist_bound_source = "benign_max"
             else:
                 dist_bound_val = None
                 dist_bound_source = "none"
@@ -2767,27 +2762,26 @@ class AttackerClient(Client):
         # Cache cosine similarity statistics before loop (avoid recomputation each step)
         # CRITICAL: Use detach() to avoid creating computation graph (statistics are for threshold calculation only)
         # Compute this BEFORE initial state printing so we can include similarity info
-        # NOTE: Use aggregation WITHOUT current attacker for stable statistics (consistent with optimization loop)
-        # This avoids circular dependency where updating proxy_param changes the reference point
+        # NOTE: Use ONLY benign clients for statistics (excludes current attacker and other attackers)
+        # This ensures clean baseline for threshold calculation
         if self.use_cosine_similarity_constraint and len(self.benign_updates) > 0:
-            # Compute statistics using aggregation without current attacker (consistent with optimization loop)
-            # Use global_ref_cpu which already excludes current attacker
+            # Compute statistics using ONLY benign clients (global_ref_cpu is benign-only aggregation)
             cached_benign_sim_stats = self._compute_benign_cosine_similarity_statistics(
                 self.benign_updates,
-                aggregated_ref=global_ref_cpu  # Use aggregation without current attacker (consistent with optimization)
+                aggregated_ref=global_ref_cpu  # Benign-only aggregation (excludes all attackers)
             )
         else:
             cached_benign_sim_stats = None
         
         # ===== OPTIMIZATION: Pre-compute aggregation reference for similarity constraint =====
-        # CRITICAL: Use aggregation WITHOUT current attacker to avoid circular dependency
+        # CRITICAL: Use ONLY benign clients aggregation (excludes current attacker and other attackers)
         # This is a constant (doesn't depend on proxy_param), so compute once before loop
         # Similar to global_ref_gpu, this avoids re-aggregating in each iteration
         # CRITICAL: Compute this ONCE before loop, then reuse in optimization loop and initial state printing
         if self.use_cosine_similarity_constraint and len(self.benign_updates) > 0:
             if hasattr(self, 'benign_updates_gpu') and self.benign_updates_gpu is not None and len(self.benign_updates_gpu) > 0:
                 # Use pre-transferred GPU versions (already on target_device)
-                aggregation_ref_gpu_sim = global_ref_gpu  # Use same reference as distance constraint (without current attacker)
+                aggregation_ref_gpu_sim = global_ref_gpu  # Benign-only aggregation (excludes all attackers)
             else:
                 # Fallback: transfer CPU versions to GPU (shouldn't happen if preprocessing is correct)
                 aggregation_ref_gpu_sim = global_ref_cpu.to(target_device).detach()
