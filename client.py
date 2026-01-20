@@ -3160,37 +3160,37 @@ class AttackerClient(Client):
                             self.lambda_sim_low = torch.tensor(new_lambda_sim_low, device=target_device, requires_grad=False)
                             self.lambda_sim_up = torch.tensor(new_lambda_sim_up, device=target_device, requires_grad=False)
                     
-                # Logging: Print every step with multiplier values (before and after update)
-                # Track all multipliers and constraint values
-                        grad_norm = proxy_param.grad.norm().item() if proxy_param.grad is not None else 0.0
-                        log_msg = f"      [Attacker {self.client_id}] Step {step}/{self.proxy_steps-1}: " \
-                          f"dist_att={dist_att_val:.4f}, g_dist={g_dist_val:.4f}, " \
-                          f"λ_dist({lambda_dist_val:.4f}→{new_lambda_dist:.4f}), " \
-                                  f"loss={global_loss.item():.4f}, grad_norm={grad_norm:.4f}"
-                
-                        # Add similarity constraint info if enabled
-                        if self.use_cosine_similarity_constraint and cached_benign_sim_stats is not None:
-                            # Use sim_att_to_benign computed above (no need to recompute)
-                            sim_att_log = sim_att_to_benign.item()
-                            benign_sim_mean_val = cached_benign_sim_stats['mean'].item()
-                            benign_sim_std_val = cached_benign_sim_stats['std'].item()
-                            
-                            # Recompute bounds for logging (consistent with constraint calculation above)
-                            # Always use mean ± 2*std mode (more stable than min/max, avoids outlier issues)
-                            if self.sim_center is not None:
-                                sim_center_log = self.sim_center
-                                sim_bound_low_log = max(-1.0, min(1.0, sim_center_log - 2.0 * benign_sim_std_val))
-                                sim_bound_up_log = max(-1.0, min(1.0, sim_center_log + 2.0 * benign_sim_std_val))
-                            else:
-                                # Use mean ± 2*std (statistically robust, covers ~97.5% of benign clients, less affected by outliers)
-                                sim_bound_low_log = max(-1.0, min(1.0, benign_sim_mean_val - 2.0 * benign_sim_std_val))
-                                sim_bound_up_log = max(-1.0, min(1.0, benign_sim_mean_val + 2.0 * benign_sim_std_val))
-                            
-                            log_msg += f", sim_att={sim_att_log:.4f}∈[{sim_bound_low_log:.4f},{sim_bound_up_log:.4f}], " \
-                                       f"λ_sim_low({lambda_sim_low_val:.4f}→{new_lambda_sim_low:.4f}), " \
-                                       f"λ_sim_up({lambda_sim_up_val:.4f}→{new_lambda_sim_up:.4f}), " \
-                                       f"g_low={g_sim_low_val:.4f}, g_up={g_sim_up_val:.4f}"
-                            print(log_msg)
+                    # Logging: Print every step with multiplier values (before and after update)
+                    # Track all multipliers and constraint values
+                    grad_norm = proxy_param.grad.norm().item() if proxy_param.grad is not None else 0.0
+                    log_msg = f"      [Attacker {self.client_id}] Step {step}/{self.proxy_steps-1}: " \
+                              f"dist_att={dist_att_val:.4f}, g_dist={g_dist_val:.4f}, " \
+                              f"λ_dist({lambda_dist_val:.4f}→{new_lambda_dist:.4f}), " \
+                              f"loss={global_loss.item():.4f}, grad_norm={grad_norm:.4f}"
+                    
+                    # Add similarity constraint info if enabled
+                    if self.use_cosine_similarity_constraint and cached_benign_sim_stats is not None:
+                        # Use sim_att_to_benign computed above (no need to recompute)
+                        sim_att_log = sim_att_to_benign.item()
+                        benign_sim_mean_val = cached_benign_sim_stats['mean'].item()
+                        benign_sim_std_val = cached_benign_sim_stats['std'].item()
+                        
+                        # Recompute bounds for logging (consistent with constraint calculation above)
+                        # Always use mean ± 2*std mode (more stable than min/max, avoids outlier issues)
+                        if self.sim_center is not None:
+                            sim_center_log = self.sim_center
+                            sim_bound_low_log = max(-1.0, min(1.0, sim_center_log - 2.0 * benign_sim_std_val))
+                            sim_bound_up_log = max(-1.0, min(1.0, sim_center_log + 2.0 * benign_sim_std_val))
+                        else:
+                            # Use mean ± 2*std (statistically robust, covers ~97.5% of benign clients, less affected by outliers)
+                            sim_bound_low_log = max(-1.0, min(1.0, benign_sim_mean_val - 2.0 * benign_sim_std_val))
+                            sim_bound_up_log = max(-1.0, min(1.0, benign_sim_mean_val + 2.0 * benign_sim_std_val))
+                        
+                        log_msg += f", sim_att={sim_att_log:.4f}∈[{sim_bound_low_log:.4f},{sim_bound_up_log:.4f}], " \
+                                   f"λ_sim_low({lambda_sim_low_val:.4f}→{new_lambda_sim_low:.4f}), " \
+                                   f"λ_sim_up({lambda_sim_up_val:.4f}→{new_lambda_sim_up:.4f}), " \
+                                   f"g_low={g_sim_low_val:.4f}, g_up={g_sim_up_val:.4f}"
+                    print(log_msg)
                     
                     # ============================================================
                     # Early stopping: Stop when ALL constraints are satisfied and stable
