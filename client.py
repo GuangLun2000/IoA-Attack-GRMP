@@ -2009,35 +2009,38 @@ class AttackerClient(Client):
         return sim.squeeze(0)  # Return scalar tensor
     
     def _compute_benign_cosine_similarity_statistics(self, benign_updates: List[torch.Tensor],
-                                                     malicious_update: torch.Tensor) -> Dict[str, torch.Tensor]:
+                                                     aggregated_ref: torch.Tensor = None) -> Dict[str, torch.Tensor]:
         """
-        Compute cosine similarity statistics for all clients (benign + attackers).
+        Compute cosine similarity statistics for updates relative to a reference aggregation.
         
-        For each update Δ_i (including benign and attacker updates), compute cosine_similarity(Δ_i, Δ_g_global),
-        where Δ_g_global is the aggregated update from ALL CLIENTS AND ATTACKERS (including current attacker).
+        For each update Δ_i, compute cosine_similarity(Δ_i, Δ_ref),
+        where Δ_ref is the provided aggregated reference update.
         
-        MODIFIED: Now uses global aggregation (all clients + all attackers) to match server-side computation.
-        This ensures consistency between optimization constraints and server-side similarity calculations.
+        CRITICAL: For stable optimization, the reference should NOT include the current attacker.
+        This avoids circular dependency where updating proxy_param changes the reference point.
         
         Args:
             benign_updates: List of all benign updates Δ_i
-            malicious_update: Δ_att (current attacker's update, included in global aggregation)
+            aggregated_ref: Reference aggregated update (if None, compute from benign_updates only)
+                           Should NOT include current attacker for stable optimization
         
         Returns:
             Dictionary with statistics: mean, std, min, max, median
         """
-        # Collect all updates (benign + current attacker + other attackers if available)
-        all_updates = benign_updates.copy()
-        if malicious_update is not None:
-            all_updates.append(malicious_update)
+        # Use provided reference or compute from benign updates only
+        if aggregated_ref is None:
+            aggregated_ref = self._aggregate_benign_only(benign_updates, device=None)
         
-        # Add other attackers if available
+        aggregated_flat = aggregated_ref.view(-1)
+        device = aggregated_flat.device
+        
+        # Collect all updates to compute statistics (benign + other attackers if available)
+        all_updates = benign_updates.copy()
         if hasattr(self, 'other_attacker_updates') and self.other_attacker_updates is not None:
             all_updates.extend(self.other_attacker_updates)
         
         if len(all_updates) == 0:
             # Return dummy statistics if no updates
-            device = torch.device('cpu')
             return {
                 'mean': torch.tensor(1.0, device=device),
                 'std': torch.tensor(0.0, device=device),
@@ -2046,17 +2049,7 @@ class AttackerClient(Client):
                 'median': torch.tensor(1.0, device=device)
             }
         
-        # Compute aggregated update from ALL CLIENTS AND ATTACKERS (global aggregation)
-        aggregated_update = self._aggregate_global_reference(
-            benign_updates=benign_updates,
-            other_attacker_updates=getattr(self, 'other_attacker_updates', None),
-            current_attacker_update=malicious_update,
-            device=None
-        )
-        aggregated_flat = aggregated_update.view(-1)
-        device = aggregated_flat.device
-        
-        # Compute similarity for each update (benign + attackers)
+        # Compute similarity for each update relative to the reference aggregation
         all_similarities = []
         for update in all_updates:
             update_flat = update.view(-1).to(device)
@@ -2091,42 +2084,60 @@ class AttackerClient(Client):
                                            benign_ref_update: torch.Tensor = None,
                                            current_attacker_update: torch.Tensor = None) -> Dict[str, torch.Tensor]:
         """
-        Compute statistics of distances from all updates (benign + attackers) to global reference update.
+        Compute statistics of distances from updates to a reference aggregation.
         
-        For each update Δ_i (including benign and attacker updates), compute distance ||Δ_i - Δ_global_ref||,
-        where Δ_global_ref is the aggregated update from ALL CLIENTS AND ATTACKERS (including current attacker).
+        For each update Δ_i, compute distance ||Δ_i - Δ_ref||,
+        where Δ_ref is the provided reference aggregated update.
         
-        MODIFIED: Now uses global aggregation (all clients + all attackers) to match server-side computation.
-        This ensures consistency between optimization constraints and server-side distance calculations.
+        CRITICAL: For stable optimization, the reference should NOT include the current attacker.
+        This avoids circular dependency where updating proxy_param changes the reference point.
         
         Args:
             benign_updates: List of all benign updates Δ_i
-            benign_ref_update: Optional global reference update (if None, compute from all updates)
-            current_attacker_update: Current attacker's update Δ_att (included in global aggregation)
+            benign_ref_update: Reference aggregated update (if None, compute from benign_updates only)
+                             Should NOT include current attacker for stable optimization
+            current_attacker_update: Optional current attacker's update (if provided and benign_ref_update is None,
+                                    will be included in aggregation; but typically should be None for stable stats)
         
         Returns:
             Dictionary with statistics: mean, std, min, max, median
         """
-        # Compute or use provided global reference update (ALL CLIENTS + ALL ATTACKERS)
+        # Compute or use provided reference update
+        # CRITICAL: For stable optimization, should NOT include current attacker
         if benign_ref_update is None:
-            benign_ref_update = self._aggregate_global_reference(
-                benign_updates=benign_updates,
-                other_attacker_updates=getattr(self, 'other_attacker_updates', None),
-                current_attacker_update=current_attacker_update,
-                device=None
-            )
+            if current_attacker_update is not None:
+                # If current_attacker_update is provided, include it (but this is not recommended for optimization)
+                benign_ref_update = self._aggregate_global_reference(
+                    benign_updates=benign_updates,
+                    other_attacker_updates=getattr(self, 'other_attacker_updates', None),
+                    current_attacker_update=current_attacker_update,
+                    device=None
+                )
+            else:
+                # Use aggregation without current attacker (recommended for stable optimization)
+                benign_ref_update = self._aggregate_benign_only(benign_updates, device=None)
+                # Add other attackers if available
+                if hasattr(self, 'other_attacker_updates') and self.other_attacker_updates is not None:
+                    # Compute weighted aggregation including other attackers
+                    benign_ref_update, _, _ = self._aggregate_update_no_beta(
+                        torch.zeros_like(benign_ref_update),  # Dummy, not included
+                        benign_updates=benign_updates,
+                        other_attacker_updates_list=self.other_attacker_updates,
+                        include_current_attacker=False,
+                        device=None
+                    )
         
         aggregated_flat = benign_ref_update.view(-1)
         device = aggregated_flat.device
         
-        # Collect all updates (benign + current attacker + other attackers if available)
+        # Collect updates for statistics (benign + other attackers, but NOT current attacker)
+        # CRITICAL: Exclude current attacker to avoid circular dependency in statistics
         all_updates = benign_updates.copy()
-        if current_attacker_update is not None:
-            all_updates.append(current_attacker_update)
         if hasattr(self, 'other_attacker_updates') and self.other_attacker_updates is not None:
             all_updates.extend(self.other_attacker_updates)
+        # NOTE: current_attacker_update is NOT included in statistics to avoid circular dependency
         
-        # Compute distance for each update (benign + attackers)
+        # Compute distance for each update (benign + other attackers, excluding current attacker)
         all_distances = []
         for update in all_updates:
             update_flat = update.view(-1).to(device)
@@ -2706,15 +2717,16 @@ class AttackerClient(Client):
         global_ref_gpu.requires_grad_(False)  # Ensure no gradient tracking
         # ============================================================================================
         
-        # Cache global distance statistics before loop (for automatic d_T calculation)
-        # Similar to similarity constraint: if d_T is None, use global mean distance
+        # Cache distance statistics before loop (for automatic d_T calculation)
         # CRITICAL: Use detach() to avoid creating computation graph (statistics are for threshold calculation only)
-        # MODIFIED: Now uses global aggregation (all clients + all attackers including current attacker)
-        if len(self.benign_updates) > 0 or proxy_param is not None:
+        # NOTE: Statistics can use global aggregation (all clients + all attackers) for threshold setting,
+        # but optimization uses aggregation WITHOUT current attacker to avoid circular dependency.
+        # Using global_ref_cpu which excludes current attacker (consistent with optimization loop)
+        if len(self.benign_updates) > 0:
             cached_benign_dist_stats = self._compute_benign_distance_statistics(
                 self.benign_updates,
-                benign_ref_update=global_ref_cpu,  # Use global reference (all clients + all attackers)
-                current_attacker_update=proxy_param.detach()  # Include current attacker
+                benign_ref_update=global_ref_cpu,  # Use reference without current attacker (consistent with optimization)
+                current_attacker_update=None  # Exclude current attacker for stable statistics
             )
         else:
             cached_benign_dist_stats = None
@@ -2741,40 +2753,36 @@ class AttackerClient(Client):
         # Store effective dist_bound for use in final constraint check
         self._effective_dist_bound = dist_bound_val
         
-        # Cache global cosine similarity statistics before loop (avoid recomputation each step)
+        # Cache cosine similarity statistics before loop (avoid recomputation each step)
         # CRITICAL: Use detach() to avoid creating computation graph (statistics are for threshold calculation only)
         # Compute this BEFORE initial state printing so we can include similarity info
-        # MODIFIED: Now uses global aggregation (all clients + all attackers including current attacker)
-        if self.use_cosine_similarity_constraint and (len(self.benign_updates) > 0 or proxy_param is not None):
-            # Use initial proxy_param to compute global reference statistics (includes all clients and attackers)
+        # NOTE: Use aggregation WITHOUT current attacker for stable statistics (consistent with optimization loop)
+        # This avoids circular dependency where updating proxy_param changes the reference point
+        if self.use_cosine_similarity_constraint and len(self.benign_updates) > 0:
+            # Compute statistics using aggregation without current attacker (consistent with optimization loop)
+            # Use global_ref_cpu which already excludes current attacker
             cached_benign_sim_stats = self._compute_benign_cosine_similarity_statistics(
                 self.benign_updates,
-                proxy_param.detach()  # Include current attacker in global aggregation
+                aggregated_ref=global_ref_cpu  # Use aggregation without current attacker (consistent with optimization)
             )
         else:
             cached_benign_sim_stats = None
         
-        # ===== OPTIMIZATION: Pre-compute global_ref_gpu_sim to avoid repeated computation in loop =====
-        # MODIFIED: Now uses global aggregation (all clients + all attackers including current attacker)
-        # NOTE: This will be recomputed in each optimization step since proxy_param changes, but we compute initial value here
-        # CRITICAL: Compute this ONCE before loop for initial state printing
-        if self.use_cosine_similarity_constraint and (len(self.benign_updates) > 0 or proxy_param is not None):
-            # Compute initial global reference (includes all clients and attackers)
-            # This will be recomputed in optimization loop as proxy_param changes
+        # ===== OPTIMIZATION: Pre-compute aggregation reference for similarity constraint =====
+        # CRITICAL: Use aggregation WITHOUT current attacker to avoid circular dependency
+        # This is a constant (doesn't depend on proxy_param), so compute once before loop
+        # Similar to global_ref_gpu, this avoids re-aggregating in each iteration
+        # CRITICAL: Compute this ONCE before loop, then reuse in optimization loop and initial state printing
+        if self.use_cosine_similarity_constraint and len(self.benign_updates) > 0:
             if hasattr(self, 'benign_updates_gpu') and self.benign_updates_gpu is not None and len(self.benign_updates_gpu) > 0:
-                benign_updates_for_ref = self.benign_updates_gpu
+                # Use pre-transferred GPU versions (already on target_device)
+                aggregation_ref_gpu_sim = global_ref_gpu  # Use same reference as distance constraint (without current attacker)
             else:
-                benign_updates_for_ref = [u.to(target_device) for u in self.benign_updates] if len(self.benign_updates) > 0 else []
-            
-            global_ref_gpu_sim_initial = self._aggregate_global_reference(
-                benign_updates=benign_updates_for_ref,
-                other_attacker_updates_gpu=getattr(self, 'other_attacker_updates_gpu', None),
-                current_attacker_update=proxy_param.detach(),
-                device=target_device
-            ).detach()
-            global_ref_gpu_sim_initial.requires_grad_(False)  # Ensure no gradient tracking
+                # Fallback: transfer CPU versions to GPU (shouldn't happen if preprocessing is correct)
+                aggregation_ref_gpu_sim = global_ref_cpu.to(target_device).detach()
+            aggregation_ref_gpu_sim.requires_grad_(False)  # Ensure no gradient tracking
         else:
-            global_ref_gpu_sim_initial = None
+            aggregation_ref_gpu_sim = None
         # ============================================================================================
         
         # Print initial state with dist_bound value (whether manual or auto-computed)
@@ -2783,12 +2791,12 @@ class AttackerClient(Client):
                 # CRITICAL: Use detach() for initial calculations to avoid interfering with optimization loop's computation graph
                 # Use GPU versions if available (will be created right after this)
                 with torch.no_grad():
-                    # MODIFIED: Compute distance to aggregation INCLUDING current attacker (for consistency with server)
+                    # CRITICAL: Compute distance to aggregation EXCLUDING current attacker to avoid circular dependency
                     initial_global_ref_gpu, _, _ = self._aggregate_update_no_beta(
                         proxy_param.detach(),
                         benign_updates_gpu=getattr(self, 'benign_updates_gpu', None),
                         other_attacker_updates_gpu=getattr(self, 'other_attacker_updates_gpu', None),
-                        include_current_attacker=True  # MODIFIED: Now includes current attacker for consistency
+                        include_current_attacker=False  # CRITICAL: Exclude current attacker to avoid circular dependency
                     )
                     initial_dist_att_to_global = torch.norm(proxy_param.detach().view(-1) - initial_global_ref_gpu.view(-1))
                     initial_dist = initial_dist_att_to_global.item()
@@ -2798,34 +2806,26 @@ class AttackerClient(Client):
                         proxy_param.detach(),
                         benign_updates_gpu=getattr(self, 'benign_updates_gpu', None),
                         other_attacker_updates_gpu=getattr(self, 'other_attacker_updates_gpu', None),
-                        include_current_attacker=True  # MODIFIED: Now includes current attacker for consistency
+                        include_current_attacker=False  # CRITICAL: Exclude current attacker to avoid circular dependency
                     ).item()
                     
                     # Compute initial similarity metrics if similarity constraint is enabled
                     initial_sim_info = ""
                     if self.use_cosine_similarity_constraint and cached_benign_sim_stats is not None:
-                        # MODIFIED: Compute initial similarity to GLOBAL REFERENCE (all clients + all attackers)
-                        # Use global aggregation (includes all clients and attackers including current attacker)
-                        if global_ref_gpu_sim_initial is not None:
-                            initial_global_ref_gpu_sim = global_ref_gpu_sim_initial
-                        else:
-                            # Fallback: compute on-the-fly (shouldn't happen if preprocessing is correct)
-                            if hasattr(self, 'benign_updates_gpu') and self.benign_updates_gpu is not None and len(self.benign_updates_gpu) > 0:
-                                benign_updates_for_ref = self.benign_updates_gpu
-                            else:
-                                benign_updates_for_ref = [u.to(initial_global_ref_gpu.device) for u in self.benign_updates] if len(self.benign_updates) > 0 else []
-                            
-                            initial_global_ref_gpu_sim = self._aggregate_global_reference(
-                                benign_updates=benign_updates_for_ref,
-                                other_attacker_updates_gpu=getattr(self, 'other_attacker_updates_gpu', None),
-                                current_attacker_update=proxy_param.detach(),
-                                device=initial_global_ref_gpu.device
-                            )
+                        # CRITICAL: Compute initial similarity to aggregation EXCLUDING current attacker
+                        # Use aggregation without current attacker to avoid circular dependency
+                        # This matches the optimization loop's reference point
+                        initial_aggregation_without_current, _, _ = self._aggregate_update_no_beta(
+                            proxy_param.detach(),
+                            benign_updates_gpu=getattr(self, 'benign_updates_gpu', None),
+                            other_attacker_updates_gpu=getattr(self, 'other_attacker_updates_gpu', None),
+                            include_current_attacker=False  # CRITICAL: Exclude current attacker to avoid circular dependency
+                        )
                         proxy_param_flat = proxy_param.detach().view(-1)
-                        initial_global_ref_flat = initial_global_ref_gpu_sim.view(-1)
+                        initial_aggregation_flat = initial_aggregation_without_current.view(-1)
                         initial_sim_att_to_benign = torch.cosine_similarity(
                             proxy_param_flat.unsqueeze(0),
-                            initial_global_ref_flat.unsqueeze(0),
+                            initial_aggregation_flat.unsqueeze(0),
                             dim=1
                         ).squeeze(0).item()
                         
@@ -2835,8 +2835,8 @@ class AttackerClient(Client):
                         benign_sim_min = cached_benign_sim_stats['min']
                         benign_sim_max = cached_benign_sim_stats['max']
                         
-                        # Print global similarity statistics for debugging (includes all clients and attackers)
-                        print(f"    [Attacker {self.client_id}] Global similarity stats (all clients + attackers): "
+                        # Print similarity statistics for debugging (relative to aggregation without current attacker)
+                        print(f"    [Attacker {self.client_id}] Similarity stats (relative to aggregation without current attacker): "
                               f"mean={benign_sim_mean.item():.4f}, std={benign_sim_std.item():.4f}, "
                               f"min={benign_sim_min.item():.4f}, max={benign_sim_max.item():.4f}, "
                               f"bounds=[mean-2*std, mean+2*std]=[{benign_sim_mean.item() - 2.0 * benign_sim_std.item():.4f}, {benign_sim_mean.item() + 2.0 * benign_sim_std.item():.4f}]")
@@ -2897,14 +2897,19 @@ class AttackerClient(Client):
             # ============================================================
             # ============================================================
             # Compute loss of AGGREGATED global model: F(w_g + Δ_g)
-            # MODIFIED: include_current_attacker=True - optimization now includes current attacker for consistency
+            # CRITICAL: include_current_attacker=False to avoid circular dependency in optimization
+            # When include_current_attacker=True, global aggregation includes proxy_param, creating:
+            #   global_agg = f(proxy_param, ...)
+            #   distance = ||proxy_param - global_agg||
+            # This creates a circular dependency where updating proxy_param changes the distance definition,
+            # making optimization unstable. Using False ensures stable optimization.
             # ============================================================
             # CRITICAL: Use GPU versions to avoid device transfers and maintain computation graph
             global_loss = self._compute_global_loss(
                 proxy_param,
                 benign_updates_gpu=getattr(self, 'benign_updates_gpu', None),
                 other_attacker_updates_gpu=getattr(self, 'other_attacker_updates_gpu', None),
-                include_current_attacker=True  # MODIFIED: Now includes current attacker for consistency
+                include_current_attacker=False  # CRITICAL: Exclude current attacker to avoid circular dependency
             )
             
             # ============================================================
@@ -2920,13 +2925,17 @@ class AttackerClient(Client):
                 # ============================================================
                 # Distance Constraint: g_dist(x) = dist(Δ_att, Δ_g) - dist_bound <= 0
                 # ============================================================
-                # MODIFIED: Compute global reference INCLUDING current attacker (for consistency with server)
-                # This ensures constraint measures distance to final aggregation including current attacker
+                # CRITICAL: Compute global reference EXCLUDING current attacker to avoid circular dependency
+                # When include_current_attacker=True, global aggregation includes proxy_param, creating:
+                #   global_agg = f(proxy_param, ...)
+                #   distance = ||proxy_param - global_agg||
+                # This creates a circular dependency where updating proxy_param changes the distance definition.
+                # Using False ensures stable optimization: distance measures to aggregation without current attacker.
                 global_ref_gpu, _, _ = self._aggregate_update_no_beta(
                     proxy_param,
                     benign_updates_gpu=getattr(self, 'benign_updates_gpu', None),
                     other_attacker_updates_gpu=getattr(self, 'other_attacker_updates_gpu', None),
-                    include_current_attacker=True  # MODIFIED: Now includes current attacker for consistency
+                    include_current_attacker=False  # CRITICAL: Exclude current attacker to avoid circular dependency
                 )
                 dist_att_to_global = torch.norm(proxy_param.view(-1) - global_ref_gpu.view(-1))
                 
@@ -2960,26 +2969,30 @@ class AttackerClient(Client):
                 # ============================================================
                 sim_lagr_term = torch.tensor(0.0, device=target_device)
                 if self.use_cosine_similarity_constraint and cached_benign_sim_stats is not None:
-                    # MODIFIED: Compute similarity to GLOBAL REFERENCE (all clients + all attackers including current attacker)
-                    # This ensures consistency with server-side similarity calculation
-                    # NOTE: Must recompute in each step since proxy_param changes (global aggregation includes current attacker)
+                    # CRITICAL: Compute similarity to aggregation EXCLUDING current attacker to avoid circular dependency
+                    # When include_current_attacker=True, global aggregation includes proxy_param, creating:
+                    #   global_agg = f(proxy_param, ...)
+                    #   similarity = cosine(proxy_param, global_agg)
+                    # This creates a circular dependency. Using aggregation without current attacker ensures stable optimization.
+                    # Use pre-computed benign+other_attackers aggregation (constant throughout optimization)
                     if hasattr(self, 'benign_updates_gpu') and self.benign_updates_gpu is not None and len(self.benign_updates_gpu) > 0:
                         benign_updates_for_ref = self.benign_updates_gpu
                     else:
                         benign_updates_for_ref = [u.to(target_device) for u in self.benign_updates] if len(self.benign_updates) > 0 else []
                     
-                    # Compute global reference (includes all clients and attackers including current attacker)
-                    global_ref_gpu_sim_current = self._aggregate_global_reference(
-                        benign_updates=benign_updates_for_ref,
+                    # Compute aggregation without current attacker (stable reference throughout optimization)
+                    # This is equivalent to: benign + other_attackers aggregation
+                    aggregation_without_current, _, _ = self._aggregate_update_no_beta(
+                        proxy_param,  # Not included in aggregation, just for API compatibility
+                        benign_updates_gpu=benign_updates_for_ref,
                         other_attacker_updates_gpu=getattr(self, 'other_attacker_updates_gpu', None),
-                        current_attacker_update=proxy_param,  # Include current attacker (changes each step)
-                        device=target_device
+                        include_current_attacker=False  # CRITICAL: Exclude current attacker to avoid circular dependency
                     )
                     proxy_param_flat = proxy_param.view(-1)
-                    global_ref_flat = global_ref_gpu_sim_current.view(-1)
+                    aggregation_without_current_flat = aggregation_without_current.view(-1)
                     sim_att_to_benign = torch.cosine_similarity(
                         proxy_param_flat.unsqueeze(0),
-                        global_ref_flat.unsqueeze(0),
+                        aggregation_without_current_flat.unsqueeze(0),
                         dim=1
                     ).squeeze(0)
                     
@@ -3058,12 +3071,12 @@ class AttackerClient(Client):
                 dist_bound_val_hc = float(self.dist_bound) if isinstance(self.dist_bound, torch.Tensor) else self.dist_bound if self.dist_bound is not None else None
                 if dist_bound_val_hc is not None:
                     # CRITICAL: Use GPU versions even in hard constraint mode to avoid device transfers
-                    # MODIFIED: Now includes current attacker for consistency
+                    # CRITICAL: Exclude current attacker to avoid circular dependency in optimization
                     dist_att_to_agg, _ = self._compute_distance_update_space(
                         proxy_param,
                         benign_updates_gpu=getattr(self, 'benign_updates_gpu', None),
                         other_attacker_updates_gpu=getattr(self, 'other_attacker_updates_gpu', None),
-                        include_current_attacker=True  # MODIFIED: Now includes current attacker for consistency
+                        include_current_attacker=False  # CRITICAL: Exclude current attacker to avoid circular dependency
                     )
                     constraint_dist_violation = F.relu(dist_att_to_agg - dist_bound_val_hc)
                 else:
@@ -3111,7 +3124,7 @@ class AttackerClient(Client):
                     )
 
                 # Additional gradient-link verification (only when need_check=True)
-                # MODIFIED: When include_current_attacker=True, global_loss DOES depend on proxy_param,
+                # CRITICAL: When include_current_attacker=False, global_loss does NOT depend on proxy_param,
                 # so its gradient w.r.t. proxy_param is zero (this is expected behavior).
                 # However, lagrangian_objective SHOULD have gradient because constraint terms depend on proxy_param.
                 # So we verify lagrangian_objective's gradient instead of global_loss's gradient.
@@ -3138,20 +3151,20 @@ class AttackerClient(Client):
                             )
                         
                         # Optional: Also check global_loss gradient (for information, not error)
-                        # MODIFIED: When include_current_attacker=True, this should NOT be zero (global_loss depends on proxy_param)
+                        # CRITICAL: When include_current_attacker=False, this may be zero (expected, global_loss doesn't depend on proxy_param)
                         try:
                             g_global = torch.autograd.grad(
                                 global_loss,
                                 proxy_param,
                                 retain_graph=False,
-                                allow_unused=False,  # MODIFIED: Should be used when include_current_attacker=True
+                                allow_unused=True,  # CRITICAL: May be unused when include_current_attacker=False
                                 create_graph=False
                             )[0]
                             if g_global is not None:
                                 grad_norm_global = g_global.norm().item()
                                 if grad_norm_global < 1e-10:
                                     print(f"    [Attacker {self.client_id}] Info at step {step}: "
-                                          f"global_loss gradient is zero (unexpected when include_current_attacker=True).")
+                                          f"global_loss gradient is zero (expected when include_current_attacker=False).")
                         except:
                             # Ignore errors in optional check
                             pass
@@ -3328,12 +3341,13 @@ class AttackerClient(Client):
         if effective_dist_bound_final is not None:
             # CRITICAL: Compute distance to aggregation EXCLUDING current attacker (consistent with optimization loop)
             # Optimization does not include current attacker
-            # MODIFIED: Now includes current attacker for consistency
+            # CRITICAL: Compute distance to aggregation EXCLUDING current attacker (consistent with optimization loop)
+            # This matches the constraint used during optimization
             final_global_ref_gpu, _, _ = self._aggregate_update_no_beta(
                 proxy_param,
                 benign_updates_gpu=getattr(self, 'benign_updates_gpu', None),
                 other_attacker_updates_gpu=getattr(self, 'other_attacker_updates_gpu', None),
-                include_current_attacker=True  # MODIFIED: Now includes current attacker for consistency
+                include_current_attacker=False  # CRITICAL: Exclude current attacker (consistent with optimization)
             )
             final_dist_att_to_global = torch.norm(proxy_param.view(-1) - final_global_ref_gpu.view(-1))
             final_dist_att = final_dist_att_to_global.item()
@@ -3344,7 +3358,7 @@ class AttackerClient(Client):
                 proxy_param,
                 benign_updates_gpu=getattr(self, 'benign_updates_gpu', None),
                 other_attacker_updates_gpu=getattr(self, 'other_attacker_updates_gpu', None),
-                include_current_attacker=True  # MODIFIED: Now includes current attacker for consistency
+                include_current_attacker=False  # CRITICAL: Exclude current attacker (consistent with optimization)
             ).item()
             final_violation = max(0, final_g_dist)
             violation_pct = (final_violation / dist_bound_final * 100) if dist_bound_final > 0 else 0.0
@@ -3379,14 +3393,14 @@ class AttackerClient(Client):
         malicious_update_cpu = malicious_update.cpu() if malicious_update.device.type == 'cuda' else malicious_update
         effective_dist_bound = getattr(self, '_effective_dist_bound', self.dist_bound)
         if effective_dist_bound is not None:
-            # MODIFIED: Compute distance to aggregation INCLUDING current attacker (consistent with optimization loop)
+            # CRITICAL: Compute distance to aggregation EXCLUDING current attacker (consistent with optimization loop)
             # Use CPU versions since GPU caches have been cleaned up
-            # MODIFIED: Now includes current attacker for consistency
+            # This matches the constraint used during optimization
             final_global_ref_cpu, _, _ = self._aggregate_update_no_beta(
                 malicious_update_cpu,
                 benign_updates=self.benign_updates,
                 other_attacker_updates_list=self.other_attacker_updates if hasattr(self, 'other_attacker_updates') else None,
-                include_current_attacker=True  # MODIFIED: Now includes current attacker for consistency
+                include_current_attacker=False  # CRITICAL: Exclude current attacker (consistent with optimization)
             )
             dist_to_global_final = torch.norm(malicious_update_cpu.view(-1) - final_global_ref_cpu.view(-1))
             dist_to_global = dist_to_global_final.item()
@@ -3406,12 +3420,12 @@ class AttackerClient(Client):
         # Compute final attack objective value for logging
         # Use aggregated update for final loss (consistent with optimization objective)
         # CRITICAL: Use CPU version for final aggregation (GPU caches have been cleaned up)
-        # MODIFIED: Now includes current attacker for consistency
+        # Exclude current attacker to match optimization loop
         final_aggregated_update, _, _ = self._aggregate_update_no_beta(
             malicious_update_cpu, 
             self.benign_updates,
             other_attacker_updates_list=self.other_attacker_updates if hasattr(self, 'other_attacker_updates') else None,
-            include_current_attacker=True  # MODIFIED: Now includes current attacker for consistency
+            include_current_attacker=False  # CRITICAL: Exclude current attacker (consistent with optimization)
         )
         final_global_loss = self._proxy_global_loss(final_aggregated_update, max_batches=self.proxy_max_batches_eval, skip_dim_check=True)
         
