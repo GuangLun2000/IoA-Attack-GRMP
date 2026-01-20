@@ -244,8 +244,6 @@ class AttackerClient(Client):
                  vgae_latent_dim=16,
                  vgae_dropout=0.0,
                  proxy_steps=20,
-                 gsp_perturbation_scale=0.01,
-                 opt_init_perturbation_scale=0.001,
                  grad_clip_norm=1.0,
                  early_stop_constraint_stability_steps=3):
         """
@@ -272,8 +270,6 @@ class AttackerClient(Client):
             vgae_latent_dim: VGAE latent space dimension (default: 16, per paper)
             vgae_dropout: VGAE dropout rate (default: 0.0)
             proxy_steps: Number of optimization steps for attack objective (default: 20)
-            gsp_perturbation_scale: Perturbation scale for GSP attack diversity (default: 0.01)
-            opt_init_perturbation_scale: Perturbation scale for optimization initialization (default: 0.001)
             grad_clip_norm: Gradient clipping norm for training stability (default: 1.0)
         
         Note: lr, local_epochs, and alpha must be explicitly provided to ensure consistency
@@ -296,8 +292,6 @@ class AttackerClient(Client):
         self.vgae_latent_dim = vgae_latent_dim
         self.vgae_dropout = vgae_dropout
         self.proxy_steps = proxy_steps
-        self.gsp_perturbation_scale = gsp_perturbation_scale
-        self.opt_init_perturbation_scale = opt_init_perturbation_scale
         self.grad_clip_norm = grad_clip_norm
         self.early_stop_constraint_stability_steps = early_stop_constraint_stability_steps
 
@@ -2259,37 +2253,12 @@ class AttackerClient(Client):
             return torch.zeros(M, device=feature_matrix.device, dtype=feature_matrix.dtype)
         
         # Select a vector from F̂ as the malicious update
+        # Paper: "vectors w'_j(t) in F̂ are selected as malicious local models"
         # Use client_id to select different vectors for different attackers (for diversity)
         # This ensures different attackers use different malicious models from F̂
         select_idx = int(self.client_id % F_recon_rows)  # Ensure Python int
         gsp_attack = F_recon[select_idx].clone()  # Select one row from F̂ as w'_j(t), clone to avoid view issues
-        
-        # Add client-specific perturbation to ensure diversity among attackers
-        # This is important because:
-        # 1. If F_recon has only one row, all attackers select the same row, so perturbation is essential
-        # 2. If F_recon has multiple rows, different attackers may select different rows, but the rows
-        #    may still be similar due to similar VGAE training. Perturbation adds additional diversity.
-        # Use deterministic random number generation based on client_id and select_idx for reproducibility
-        import hashlib
-        pert_seed_str = f"gsp_pert_{self.client_id}_{select_idx}_{F_recon_rows}"
-        pert_seed = int(hashlib.md5(pert_seed_str.encode()).hexdigest()[:8], 16) % (2**31)
-        
-        # Save current random state
-        rng_state_before = torch.get_rng_state()
-        
-        # Set seed for perturbation generation
-        torch.manual_seed(pert_seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed(pert_seed)
-        
-        # Generate perturbation with client_id and select_idx dependent scale
-        # Scale increases with client_id and select_idx to ensure different perturbations
-        perturbation_scale = self.gsp_perturbation_scale * (self.client_id + 1) * (1.0 + 0.1 * select_idx)
-        perturbation = torch.randn_like(gsp_attack) * perturbation_scale
-        gsp_attack = gsp_attack + perturbation
-        
-        # Restore random state
-        torch.set_rng_state(rng_state_before)
+        # Note: No perturbation added here - strictly follows paper definition: w'_j(t) = F̂[select_idx]
         
         # Ensure gsp_attack is 1D tensor (not scalar)
         gsp_dim_count = int(gsp_attack.dim())  # Convert to Python int
@@ -2499,14 +2468,10 @@ class AttackerClient(Client):
                 print(f"    [Attacker {self.client_id}] LoRA dimension check passed: "
                       f"global_params={global_numel}, _flat_numel={self._flat_numel}")
         proxy_lr = self.proxy_step
-        # Add small client-specific perturbation to initial malicious_update to ensure diversity
-        # This helps different attackers converge to different local optima
-        if self.is_attacker:
-            perturbation_scale = self.opt_init_perturbation_scale * (self.client_id + 1)  # Small scale, client-specific
-            initial_perturbation = torch.randn_like(malicious_update) * perturbation_scale
-            proxy_param = (malicious_update + initial_perturbation).clone().detach().to(self.device)
-        else:
-            proxy_param = malicious_update.clone().detach().to(self.device)
+        # Initialize optimization variable from GSP-generated malicious update
+        # Paper: optimize w'_j(t) to maximize F(w'_g(t)) subject to constraints
+        # Optimization starts from the exact w'_j(t) generated by GSP (no perturbation)
+        proxy_param = malicious_update.clone().detach().to(self.device)
         proxy_param.requires_grad_(True)
         proxy_opt = optim.Adam([proxy_param], lr=proxy_lr)
         

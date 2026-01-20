@@ -215,8 +215,6 @@ def setup_experiment(config):
                 vgae_latent_dim=config['vgae_latent_dim'],
                 vgae_dropout=config['vgae_dropout'],
                 proxy_steps=config['proxy_steps'],
-                gsp_perturbation_scale=config['gsp_perturbation_scale'],
-                opt_init_perturbation_scale=config['opt_init_perturbation_scale'],
                 grad_clip_norm=config['grad_clip_norm'],
                 early_stop_constraint_stability_steps=config.get('early_stop_constraint_stability_steps', 3)
             )
@@ -629,15 +627,13 @@ def main():
         'dim_reduction_size': 10000,  # Reduced dimensionality of LLM parameters (auto-adjusted for LoRA if needed)
         'vgae_epochs': 20,  # Number of epochs for VGAE training (reference: 10)
         'vgae_lr': 0.01,  # Learning rate for VGAE optimizer (reference: 0.01)
-        'vgae_hidden_dim': 32,  # VGAE hidden layer dimension (per paper: hidden1_dim=32)
-        'vgae_latent_dim': 16,  # VGAE latent space dimension (per paper: hidden2_dim=16)
+        'vgae_hidden_dim': 64,  # VGAE hidden layer dimension (per paper: hidden1_dim=32)
+        'vgae_latent_dim': 32,  # VGAE latent space dimension (per paper: hidden2_dim=16)
         'vgae_dropout': 0.1,  # VGAE dropout rate (float, 0.0-1.0)
         
         # ========== Attack Optimization Parameters ==========
         'proxy_step': 0.01,  # Step size for gradient-free ascent toward global-loss proxy
         'proxy_steps': 120,  # Number of optimization steps for attack objective (int)
-        'gsp_perturbation_scale': 0.01,  # Perturbation scale for GSP attack diversity (float)
-        'opt_init_perturbation_scale': 0.01,  # Perturbation scale for optimization initialization (float)
         'grad_clip_norm': 20.0,  # Gradient clipping norm for training stability (float)
         'attacker_claimed_data_size': None,  # None = use actual assigned data size
         'early_stop_constraint_stability_steps': 1,  # Early stopping: stop after N consecutive steps satisfying constraint (int)
