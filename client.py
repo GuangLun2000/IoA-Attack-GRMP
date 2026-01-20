@@ -1686,7 +1686,13 @@ class AttackerClient(Client):
         w_other_att = [D_j / denom for D_j in other_attacker_weights]
         
         # Aggregate updates: Δ_g = Σ w_i * Δ_i + Σ w_j * Δ_j [+ w_att * Δ_att if include_current_attacker]
+        # CRITICAL: Initialize agg from malicious_update to preserve gradient connection
+        # Even when include_current_attacker=False, we need to maintain gradient flow
+        # Solution: Start with zero tensor but ensure it's connected to malicious_update's computation graph
         agg = torch.zeros_like(malicious_update, device=device).view(-1)
+        # CRITICAL: Ensure agg requires grad if malicious_update requires grad (for gradient flow)
+        if malicious_update.requires_grad:
+            agg = agg + 0.0 * malicious_update.view(-1)  # Connect to computation graph
         
         # Add benign updates (GPU versions should already be on correct device)
         # CRITICAL: In optimization loop, GPU versions are pre-transferred to target_device
