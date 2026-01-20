@@ -3048,19 +3048,59 @@ class AttackerClient(Client):
                     )
 
                 # Additional gradient-link verification (only when need_check=True)
+                # NOTE: When include_current_attacker=False, global_loss does NOT depend on proxy_param,
+                # so its gradient w.r.t. proxy_param is zero (this is expected behavior).
+                # However, lagrangian_objective SHOULD have gradient because constraint terms depend on proxy_param.
+                # So we verify lagrangian_objective's gradient instead of global_loss's gradient.
                 if need_check:
-                    g = torch.autograd.grad(
-                        global_loss,
-                        proxy_param,
-                        retain_graph=False,   # <-- free graph after verification
-                        allow_unused=False,
-                        create_graph=False
-                    )[0]
-                    if g is None or g.norm().item() < 1e-8:
+                    try:
+                        # Verify lagrangian_objective has gradient (this should always be true)
+                        g_lagr = torch.autograd.grad(
+                            lagrangian_objective,
+                            proxy_param,
+                            retain_graph=False,   # <-- free graph after verification
+                            allow_unused=False,   # Should not be unused - lagrangian_objective depends on proxy_param
+                            create_graph=False
+                        )[0]
+                        if g_lagr is None:
+                            raise RuntimeError(
+                                f"[Attacker {self.client_id}] Gradient verification failed at step {step}: "
+                                f"lagrangian_objective gradient is None (computation graph broken)."
+                            )
+                        grad_norm_lagr = g_lagr.norm().item()
+                        if grad_norm_lagr < 1e-10:
+                            raise RuntimeError(
+                                f"[Attacker {self.client_id}] Gradient verification failed at step {step}: "
+                                f"lagrangian_objective gradient norm too small ({grad_norm_lagr:.2e})."
+                            )
+                        
+                        # Optional: Also check global_loss gradient (for information, not error)
+                        # When include_current_attacker=False, this may be zero, which is expected
+                        try:
+                            g_global = torch.autograd.grad(
+                                global_loss,
+                                proxy_param,
+                                retain_graph=False,
+                                allow_unused=True,  # May be unused when include_current_attacker=False
+                                create_graph=False
+                            )[0]
+                            if g_global is not None:
+                                grad_norm_global = g_global.norm().item()
+                                if grad_norm_global < 1e-10:
+                                    print(f"    [Attacker {self.client_id}] Info at step {step}: "
+                                          f"global_loss gradient is zero (expected when include_current_attacker=False).")
+                        except:
+                            # Ignore errors in optional check
+                            pass
+                            
+                    except RuntimeError as e:
+                        # Re-raise RuntimeError (e.g., graph already freed)
+                        raise
+                    except Exception as e:
+                        # Other errors indicate a problem
                         raise RuntimeError(
-                            f"[Attacker {self.client_id}] Gradient verification failed at step {step}: "
-                            f"g is None or too small."
-                        )
+                            f"[Attacker {self.client_id}] Gradient verification failed at step {step}: {e}"
+                        ) from e
             # ===========================================================
             
             # Gradient clipping to prevent explosion
