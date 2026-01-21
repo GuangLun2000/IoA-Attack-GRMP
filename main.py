@@ -597,7 +597,7 @@ def main():
         'alpha': 0.1,  # Proximal regularization coefficient μ (FedProx standard: (μ/2) * ||w - w_t||²)
         
         # ========== Data Distribution ==========
-        'dirichlet_alpha': 1000,  # Make data less extreme non-IID (higher alpha = more balanced)
+        'dirichlet_alpha': 0.3,  # Make data less extreme non-IID (higher alpha = more balanced)
         # 'dataset_size_limit': None,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
         'dataset_size_limit': 20000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
         # 'dataset_size_limit': 10000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
@@ -628,8 +628,8 @@ def main():
         'dim_reduction_size': 10000,  # Reduced dimensionality of LLM parameters (auto-adjusted for LoRA if needed)
         'vgae_epochs': 20,  # Number of epochs for VGAE training (reference: 10)
         'vgae_lr': 0.01,  # Learning rate for VGAE optimizer (reference: 0.01)
-        'vgae_hidden_dim': 32,  # VGAE hidden layer dimension (per paper: hidden1_dim=32)
-        'vgae_latent_dim': 16,  # VGAE latent space dimension (per paper: hidden2_dim=16)
+        'vgae_hidden_dim': 64,  # VGAE hidden layer dimension (per paper: hidden1_dim=32)
+        'vgae_latent_dim': 32,  # VGAE latent space dimension (per paper: hidden2_dim=16)
         'vgae_dropout': 0,  # VGAE dropout rate (float, 0.0-1.0)
         'vgae_kl_weight': 0.1,  # Weight for KL divergence term in VGAE loss (float, default: 0.1)
         
