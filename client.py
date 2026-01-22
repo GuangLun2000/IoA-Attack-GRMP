@@ -581,7 +581,19 @@ class AttackerClient(Client):
     def _get_reduced_features(self, updates: List[torch.Tensor], fix_indices=True) -> torch.Tensor:
         """
         Helper function to reduce dimensionality of updates.
-        Randomly selects indices to slice the high-dimensional vector.
+        Selects indices based on update magnitude (importance) to prioritize parameters
+        that change most in normal training, simulating realistic training patterns.
+        
+        Selection strategy:
+        1. Calculate update magnitudes (absolute mean across all updates)
+        2. Select top-K important parameters (2x dim_reduction_size for diversity pool)
+        3. Randomly select from important pool using client_id for diversity
+        
+        This approach:
+        - Prioritizes important parameters (classifier, attention layers)
+        - Maintains diversity among different attackers
+        - Simulates normal training patterns (updates important params more)
+        - Aligns with FedLLM standard practices (FedPipe, FedLEASE)
         
         Args:
             updates: List of update tensors to reduce
@@ -608,21 +620,42 @@ class AttackerClient(Client):
             
         # Fix feature indices at the start of each attack round to ensure training consistency within the round
         if self.feature_indices is None or not fix_indices:
-            # Randomly select indices, but use client_id to ensure different attackers get different indices
-            # This ensures diversity among multiple attackers
+            # Importance-based selection: prioritize parameters with larger update magnitudes
+            # This simulates normal training patterns where important parameters change more
             import hashlib
-            # Use client_id and total_dim to create a unique seed for each attacker
-            # Ensure client_id and total_dim are valid integers
+            
+            # Validate inputs
             if self.client_id is None:
                 raise ValueError(f"client_id is None for attacker")
             if total_dim is None or total_dim <= 0:
                 raise ValueError(f"total_dim is None or invalid: {total_dim}")
-            seed_str = f"{self.client_id}_{total_dim}"
+            
+            # Step 1: Calculate update magnitudes (importance scores)
+            # Use absolute mean across all benign updates to identify important parameters
+            # Parameters with larger magnitudes are more important (change more in normal training)
+            update_magnitudes = torch.abs(stacked_updates).mean(dim=0)  # (total_dim,)
+            
+            # Step 2: Select top-K important parameters (2x for diversity pool)
+            # Select 2x dim_reduction_size to create a pool, then randomly select from pool
+            # This balances importance with diversity among different attackers
+            top_k = min(self.dim_reduction_size * 2, total_dim)
+            _, top_indices_tensor = torch.topk(update_magnitudes, k=top_k)
+            top_indices = top_indices_tensor.cpu().numpy()  # Convert to numpy for random selection
+            
+            # Step 3: Within top-K, use client_id for diversity (different attackers select different params)
+            # This ensures different attackers choose different parameters from the important pool
+            seed_str = f"{self.client_id}_{top_k}"
             seed = int(hashlib.md5(seed_str.encode()).hexdigest()[:8], 16) % (2**31)
-            # Use numpy random with client_id-based seed (more reliable than torch random state)
             np_rng = np.random.RandomState(seed)
-            indices = np_rng.permutation(total_dim)[:self.dim_reduction_size]
-            self.feature_indices = torch.tensor(indices, dtype=torch.long, device=self.device)
+            # Ensure we don't select more than available (safety check)
+            num_to_select = min(self.dim_reduction_size, len(top_indices))
+            permuted = np_rng.permutation(len(top_indices))[:num_to_select]
+            selected_indices = top_indices[permuted]
+            
+            # Step 4: Create feature_indices tensor on the same device as stacked_updates
+            # Ensure device consistency for index_select operation
+            target_device = stacked_updates.device
+            self.feature_indices = torch.tensor(selected_indices, dtype=torch.long, device=target_device)
             
         # Select features
         reduced_features = torch.index_select(stacked_updates, 1, self.feature_indices)
