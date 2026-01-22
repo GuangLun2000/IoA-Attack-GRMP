@@ -2303,8 +2303,10 @@ class AttackerClient(Client):
         
         # Step 4: Compute Laplacian of reconstructed graph
         # L̂ = diag(Â·1) - Â
-        degree_recon = adj_recon.sum(dim=1)
-        L_recon = torch.diag(degree_recon) - adj_recon  # (M, M)
+        # Note: adj_recon from VGAE is logits, convert to probabilities for Laplacian
+        adj_recon_probs = torch.sigmoid(adj_recon)  # Convert logits to probabilities
+        degree_recon = adj_recon_probs.sum(dim=1)
+        L_recon = torch.diag(degree_recon) - adj_recon_probs  # (M, M)
         
         # Step 5: SVD of reconstructed Laplacian
         try:

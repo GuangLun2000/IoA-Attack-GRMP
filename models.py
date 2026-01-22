@@ -167,9 +167,11 @@ class NewsClassifierModel(nn.Module):
                     lora_params.append(param.data.view(-1))
         
         if not lora_params:
-            # Fallback: if no trainable params found, return empty tensor
-            # This shouldn't happen, but handle gracefully
-            return torch.tensor([], dtype=torch.float32)
+            # No trainable LoRA parameters found - this indicates a configuration error
+            raise RuntimeError(
+                "No trainable LoRA parameters found. "
+                "Please check LoRA configuration (target_modules, r, etc.)."
+            )
         
         return torch.cat(lora_params)
 
@@ -332,9 +334,12 @@ class VGAE(nn.Module):
     def decode(self, z: torch.Tensor) -> torch.Tensor:
         """
         Inner product decoder: reconstructs the adjacency matrix.
-        A_pred = sigmoid(Z * Z^T)
+        Returns logits (before sigmoid) for use with binary_cross_entropy_with_logits.
+        A_pred = Z * Z^T (logits)
+        
+        Note: Apply sigmoid if probabilities are needed (e.g., for GSP module).
         """
-        adj_reconstructed = torch.sigmoid(torch.mm(z, z.t()))
+        adj_reconstructed = torch.mm(z, z.t())  # Return logits, not probabilities
         return adj_reconstructed
 
     def forward(self, x: torch.Tensor, adj: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
