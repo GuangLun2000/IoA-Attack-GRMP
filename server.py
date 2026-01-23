@@ -495,6 +495,7 @@ class Server:
         round_log = {
             'round': round_num + 1,
             'clean_accuracy': clean_acc,
+            'global_loss': global_loss,  # Add global loss to log for visualization
             'acc_diff': (abs(clean_acc - self.history['clean_acc'][-2])
                          if len(self.history['clean_acc']) > 1 else 0.0),
             'aggregation': aggregation_log,

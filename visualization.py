@@ -642,6 +642,75 @@ class ExperimentVisualizer:
                        dpi=600, bbox_inches='tight')
         plt.close()
     
+    def plot_global_loss(self, log_data: List[Dict], save_path: Optional[str] = None, num_rounds: Optional[int] = None):
+        """
+        Plot global loss over communication rounds.
+        
+        Args:
+            log_data: List of round logs from server
+            save_path: Path to save the figure
+            num_rounds: Total number of rounds (for validation)
+        """
+        rounds = [log['round'] for log in log_data]
+        global_losses = [log.get('global_loss', 0.0) for log in log_data]
+        
+        # Ensure all arrays have the same length
+        min_len = min(len(rounds), len(global_losses))
+        if min_len == 0:
+            print("  ⚠️  Warning: Global Loss - No data to plot")
+            return
+        
+        # Truncate all arrays to the same length
+        rounds = rounds[:min_len]
+        global_losses = global_losses[:min_len]
+        
+        # Validate/pad
+        if num_rounds is not None and len(rounds) != num_rounds:
+            print(f"  ⚠️  Warning: Global Loss - Expected {num_rounds} rounds, got {len(rounds)}")
+            expected_rounds = list(range(1, num_rounds + 1))
+            if len(rounds) < num_rounds:
+                missing = [r for r in expected_rounds if r not in rounds]
+                for _ in missing:
+                    rounds.append(expected_rounds[len(rounds)])
+                    global_losses.append(global_losses[-1] if global_losses else 0.0)
+                print(f"     Padded {len(missing)} missing rounds")
+        
+        fig, ax = plt.subplots(figsize=(6.5, 5))
+        
+        # IEEE-style: clean, professional appearance
+        ax.set_xlabel('Episodes', fontsize=11, fontweight='normal')
+        ax.set_ylabel('Global Loss', fontsize=11, fontweight='normal')
+        
+        # Plot loss line - IEEE style: solid line, clear marker
+        ax.plot(rounds, global_losses, '-', color=IEEE_COLORS['global'], 
+                linewidth=2, marker='o', markersize=4, markevery=max(1, len(rounds)//20),
+                label='Global Loss', zorder=3, markerfacecolor=IEEE_COLORS['global'],
+                markeredgecolor='white', markeredgewidth=0.5)
+        
+        # IEEE-style: subtle grid, clean axes
+        if global_losses:
+            y_min = max(0.0, min(global_losses) * 0.9)
+            y_max = max(global_losses) * 1.1
+            ax.set_ylim([y_min, y_max])
+        else:
+            ax.set_ylim([0.0, 1.0])
+        ax.set_xlim([1, max(rounds) if rounds else 1])
+        ax.grid(True, alpha=0.2, linestyle='--', linewidth=0.5)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        
+        # IEEE-style legend: clear, professional
+        ax.legend(loc='best', frameon=True, fancybox=False, shadow=False,
+                 edgecolor='black', framealpha=1.0, fontsize=9)
+        
+        # No title for IEEE style (usually added in LaTeX)
+        plt.tight_layout()
+        
+        out_path = save_path or (self.results_dir / 'global_loss.png')
+        plt.savefig(out_path, dpi=600, bbox_inches='tight')
+        print(f"  ✅ Saved Global Loss figure to: {out_path}")
+        plt.close()
+    
     def generate_all_figures(self, server_log_data: List[Dict], 
                             local_accuracies: Optional[Dict[int, List[float]]] = None,
                             attacker_ids: Optional[List[int]] = None,
@@ -744,6 +813,14 @@ class ExperimentVisualizer:
             num_rounds=num_rounds,
             num_clients=num_clients,
             num_attackers=num_attackers
+        )
+        
+        # Figure 5: Global Loss (new figure)
+        print("📊 Generating Figure 5: Global Loss...")
+        self.plot_global_loss(
+            server_log_data,
+            save_path=self.results_dir / f'{experiment_name}_figure5.png',
+            num_rounds=num_rounds
         )
         
         print("\n✅ All available figures generated successfully!")

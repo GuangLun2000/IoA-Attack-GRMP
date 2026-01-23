@@ -3158,7 +3158,13 @@ class AttackerClient(Client):
                 # Lower bound constraint: g_sim_low = sim_bound_low - sim_att <= 0
                 # Upper bound constraint: g_sim_up = sim_att - sim_bound_up <= 0
                 # ============================================================
+                # Initialize similarity constraint variables (will be zero if constraint disabled)
                 sim_lagr_term = torch.tensor(0.0, device=target_device)
+                g_sim_low = torch.tensor(0.0, device=target_device)
+                g_sim_up = torch.tensor(0.0, device=target_device)
+                lambda_sim_low_tensor = torch.tensor(0.0, device=target_device)
+                lambda_sim_up_tensor = torch.tensor(0.0, device=target_device)
+                
                 if self.use_cosine_similarity_constraint and cached_benign_sim_stats is not None:
                     # CRITICAL: Compute similarity to aggregation EXCLUDING current attacker to avoid circular dependency
                     # When include_current_attacker=True, global aggregation includes proxy_param, creating:
@@ -3221,6 +3227,7 @@ class AttackerClient(Client):
                     
                 # Similarity Lagrangian terms (NO ReLU here, standard Lagrangian)
                 # sim_lagr_term = λ_sim_low * g_sim_low + λ_sim_up * g_sim_up
+                # If use_cosine_similarity_constraint=False, all terms are zero, so sim_lagr_term = 0
                 sim_lagr_term = lambda_sim_low_tensor * g_sim_low + lambda_sim_up_tensor * g_sim_up
                 
                 
