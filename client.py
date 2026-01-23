@@ -2846,11 +2846,13 @@ class AttackerClient(Client):
                     initial_dist = initial_dist_att_to_global.item()
                     initial_g_dist = initial_dist - dist_bound_val
                     initial_lambda_dist = self.lambda_dist.item() if isinstance(self.lambda_dist, torch.Tensor) else self.lambda_dist if self.lambda_dist is not None else 0.0
+                    # MODIFIED: Use include_current_attacker=True for initial_loss display
+                    # This shows the actual global_loss that will be optimized (consistent with optimization loop)
                     initial_loss = self._compute_global_loss(
                         proxy_param.detach(),
                         benign_updates_gpu=getattr(self, 'benign_updates_gpu', None),
                         other_attacker_updates_gpu=getattr(self, 'other_attacker_updates_gpu', None),
-                        include_current_attacker=False  # CRITICAL: Exclude current attacker to avoid circular dependency
+                        include_current_attacker=True  # MODIFIED: Include current attacker (for display, matches optimization)
                     ).item()
                     
                     # Compute initial similarity metrics (always compute, not just when constraint is enabled)
@@ -2967,19 +2969,30 @@ class AttackerClient(Client):
             # ============================================================
             # ============================================================
             # Compute loss of AGGREGATED global model: F(w_g + Δ_g)
-            # CRITICAL: include_current_attacker=False to avoid circular dependency in optimization
-            # When include_current_attacker=True, global aggregation includes proxy_param, creating:
-            #   global_agg = f(proxy_param, ...)
-            #   distance = ||proxy_param - global_agg||
-            # This creates a circular dependency where updating proxy_param changes the distance definition,
-            # making optimization unstable. Using False ensures stable optimization.
+            # 
+            # MODIFICATION: Use include_current_attacker=True for global_loss calculation
+            # This allows global_loss to depend on proxy_param, enabling gradient-based optimization.
+            # 
+            # Strategy: Separate reference points for objective and constraints
+            # - Objective (global_loss): include_current_attacker=True
+            #   → F(w'_g) where w'_g = aggregate(proxy_param, benign, others)
+            #   → Gradient: ∇_proxy_param F(w'_g) ≠ 0 (can optimize)
+            # 
+            # - Constraints: include_current_attacker=False (computed separately below)
+            #   → Distance: ||proxy_param - aggregate(benign, others)||
+            #   → Stable reference point, avoids circular dependency
+            # 
+            # Why this works:
+            # - The difference between the two reference points is proxy_param's weighted contribution
+            # - If attacker weight is small (w_att << 1), the difference is negligible
+            # - Optimizing F(w'_g) and constraining ||proxy_param - aggregate(benign, others)|| are consistent
             # ============================================================
             # CRITICAL: Use GPU versions to avoid device transfers and maintain computation graph
             global_loss = self._compute_global_loss(
                 proxy_param,
                 benign_updates_gpu=getattr(self, 'benign_updates_gpu', None),
                 other_attacker_updates_gpu=getattr(self, 'other_attacker_updates_gpu', None),
-                include_current_attacker=False  # CRITICAL: Exclude current attacker to avoid circular dependency
+                include_current_attacker=True  # MODIFIED: Include current attacker to enable gradient-based optimization
             )
             
             # ============================================================
@@ -3193,10 +3206,10 @@ class AttackerClient(Client):
                     )
 
                 # Additional gradient-link verification (only when need_check=True)
-                # CRITICAL: When include_current_attacker=False, global_loss does NOT depend on proxy_param,
-                # so its gradient w.r.t. proxy_param is zero (this is expected behavior).
-                # However, lagrangian_objective SHOULD have gradient because constraint terms depend on proxy_param.
-                # So we verify lagrangian_objective's gradient instead of global_loss's gradient.
+                # MODIFIED: With include_current_attacker=True, global_loss DOES depend on proxy_param,
+                # so its gradient w.r.t. proxy_param should be non-zero (enabling optimization).
+                # lagrangian_objective SHOULD also have gradient from both global_loss and constraint terms.
+                # We verify lagrangian_objective's gradient to ensure the full computation graph is intact.
                 if need_check:
                     try:
                         # Verify lagrangian_objective has gradient (this should always be true)
@@ -3220,20 +3233,25 @@ class AttackerClient(Client):
                             )
                         
                         # Optional: Also check global_loss gradient (for information, not error)
-                        # CRITICAL: When include_current_attacker=False, this may be zero (expected, global_loss doesn't depend on proxy_param)
+                        # MODIFIED: With include_current_attacker=True, global_loss gradient should be non-zero
+                        # This verifies that the optimization objective is properly connected to proxy_param
                         try:
                             g_global = torch.autograd.grad(
                                 global_loss,
                                 proxy_param,
                                 retain_graph=False,
-                                allow_unused=True,  # CRITICAL: May be unused when include_current_attacker=False
+                                allow_unused=True,  # Allow unused for safety, but should not be unused
                                 create_graph=False
                             )[0]
                             if g_global is not None:
                                 grad_norm_global = g_global.norm().item()
                                 if grad_norm_global < 1e-10:
+                                    print(f"    [Attacker {self.client_id}] Warning at step {step}: "
+                                          f"global_loss gradient is very small ({grad_norm_global:.2e}), "
+                                          f"may indicate optimization issue.")
+                                else:
                                     print(f"    [Attacker {self.client_id}] Info at step {step}: "
-                                          f"global_loss gradient is zero (expected when include_current_attacker=False).")
+                                          f"global_loss gradient norm: {grad_norm_global:.4f} (non-zero, good)")
                         except:
                             # Ignore errors in optional check
                             pass
@@ -3477,11 +3495,13 @@ class AttackerClient(Client):
             dist_bound_final = float(effective_dist_bound_final) if isinstance(effective_dist_bound_final, torch.Tensor) else effective_dist_bound_final
             final_g_dist = final_dist_att - dist_bound_final
             final_lambda_dist = self.lambda_dist.item() if isinstance(self.lambda_dist, torch.Tensor) else self.lambda_dist if self.lambda_dist is not None else 0.0
+            # MODIFIED: Use include_current_attacker=True for final_loss display
+            # This shows the actual global_loss that was optimized (consistent with optimization loop)
             final_loss = self._compute_global_loss(
                 proxy_param,
                 benign_updates_gpu=getattr(self, 'benign_updates_gpu', None),
                 other_attacker_updates_gpu=getattr(self, 'other_attacker_updates_gpu', None),
-                include_current_attacker=False  # CRITICAL: Exclude current attacker (consistent with optimization)
+                include_current_attacker=True  # MODIFIED: Include current attacker (for display, matches optimization)
             ).item()
             final_violation = max(0, final_g_dist)
             violation_pct = (final_violation / dist_bound_final * 100) if dist_bound_final > 0 else 0.0
@@ -3594,12 +3614,12 @@ class AttackerClient(Client):
         # Compute final attack objective value for logging
         # Use aggregated update for final loss (consistent with optimization objective)
         # CRITICAL: Use CPU version for final aggregation (GPU caches have been cleaned up)
-        # Exclude current attacker to match optimization loop
+        # MODIFIED: Include current attacker to match optimization objective (global_loss calculation)
         final_aggregated_update, _, _ = self._aggregate_update_no_beta(
             malicious_update_cpu, 
             self.benign_updates,
             other_attacker_updates_list=self.other_attacker_updates if hasattr(self, 'other_attacker_updates') else None,
-            include_current_attacker=False  # CRITICAL: Exclude current attacker (consistent with optimization)
+            include_current_attacker=True  # MODIFIED: Include current attacker (matches optimization objective)
         )
         final_global_loss = self._proxy_global_loss(final_aggregated_update, max_batches=self.proxy_max_batches_eval, skip_dim_check=True)
         
