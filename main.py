@@ -625,14 +625,7 @@ def main():
         # Model configuration
         'model_name': 'distilbert-base-uncased',  # Hugging Face model name for classification
         'num_labels': 4,  # Number of classification labels
-
-        # ========== Attack Configuration ==========
-        'attack_start_round': 0,  # Round when attack phase starts (int, now all rounds use complete poisoning)
-        
-        # ========== Formula 4 Constraint Parameters ==========
-        'dist_bound': None,  # Distance threshold for constraint (4b): d(w'_j(t), w'_g(t)) ≤ dist_bound (None = use benign max distance)
-        'sim_center': None,  # Optional center for similarity bounds (None = use benign min/max)
-        
+                
         # ========== VGAE Training Parameters ==========
         # Reference paper: input_dim=5, hidden1_dim=32, hidden2_dim=16, num_epoch=10, lr=0.01
         # Note: dim_reduction_size should be <= total trainable parameters
@@ -643,13 +636,22 @@ def main():
         'vgae_latent_dim': 32,  # VGAE latent space dimension (per paper: hidden2_dim=16)
         'vgae_dropout': 0,  # VGAE dropout rate (float, 0.0-1.0)
         'vgae_kl_weight': 0.1,  # Weight for KL divergence term in VGAE loss (float, default: 0.1)
-        
+        # ========== Graph Construction Parameters ==========
+        'graph_threshold': 0.5,  # Threshold for graph adjacency matrix binarization in VGAE (float, 0.0-1.0)
+
+        # ========== Attack Configuration ==========
+        'attack_start_round': 0,  # Round when attack phase starts (int, now all rounds use complete poisoning)
+
         # ========== Attack Optimization Parameters ==========
         'proxy_step': 0.001,  # Step size for gradient-free ascent toward global-loss proxy
         'proxy_steps': 200,  # Number of optimization steps for attack objective (int)
         'grad_clip_norm': 1.0,  # Gradient clipping norm for training stability (float)
         'attacker_claimed_data_size': None,  # None = use actual assigned data size
         'early_stop_constraint_stability_steps': 1,  # Early stopping: stop after N consecutive steps satisfying constraint (int)
+
+        # ========== Formula 4 Constraint Parameters ==========
+        'dist_bound': None,  # Distance threshold for constraint (4b): d(w'_j(t), w'_g(t)) ≤ dist_bound (None = use benign max distance)
+        'sim_center': None,  # Optional center for similarity bounds (None = use benign min/max)
 
         # ========== Lagrangian Dual Parameters ==========
         'use_lagrangian_dual': True,  # Whether to use Lagrangian Dual mechanism (bool, True/False)
@@ -685,9 +687,6 @@ def main():
                                 # Used during gradient-based optimization (20 steps per round)
         'proxy_max_batches_eval': 4,  # Max batches for proxy loss in final evaluation (int)
                                 # Used for final attack objective logging (1 call per round)
-        
-        # ========== Graph Construction Parameters ==========
-        'graph_threshold': 0.5,  # Threshold for graph adjacency matrix binarization in VGAE (float, 0.0-1.0)
         
         # ========== Visualization ==========
         'generate_plots': True,  # Whether to generate visualization plots (bool)
