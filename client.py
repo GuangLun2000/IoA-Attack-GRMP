@@ -356,6 +356,36 @@ class AttackerClient(Client):
         self.lambda_sim_up_lr = 0.01  # Learning rate for λ_sim_up(t) update
         self.lambda_sim_low_init = None  # Save initial λ_sim_low value for reset
         self.lambda_sim_up_init = None  # Save initial λ_sim_up value for reset
+
+        # ============================================================
+        # Augmented Lagrangian (ALM) penalty parameters (ρ)
+        # Standard ALM uses: L_aug = f(x) + Σ_i [ λ_i g_i(x) + (ρ_i/2) g_i(x)^2 ]
+        # where g_i(x) ≤ 0 are inequality constraints.
+        # ============================================================
+        self.use_augmented_lagrangian = False  # Whether to use Augmented Lagrangian Method (ALM)
+        self.lambda_update_mode = "classic"  # "classic": λ += lr * g ; "alm": λ += ρ * g
+
+        # ρ variables (kept on same device as optimization)
+        self.rho_dist = None
+        self.rho_sim_low = None
+        self.rho_sim_up = None
+
+        # Save initial values for reset in prepare_for_round
+        self.rho_dist_init = None
+        self.rho_sim_low_init = None
+        self.rho_sim_up_init = None
+
+        # Adaptive ρ update (monotone increase) parameters
+        self.rho_adaptive = True
+        self.rho_theta = 0.5  # If violation does not decrease enough: σ_k > theta * σ_{k-1} => increase ρ
+        self.rho_increase_factor = 2.0
+        self.rho_min = 1e-3
+        self.rho_max = 1e3
+
+        # Track previous constraint violations for adaptive ρ update (per-round)
+        self._prev_violation_dist = None
+        self._prev_violation_sim_low = None
+        self._prev_violation_sim_up = None
         
         
         # Get model parameter count (works on CPU model)
@@ -429,6 +459,21 @@ class AttackerClient(Client):
             self.lambda_sim_low = torch.tensor(self.lambda_sim_low_init, requires_grad=False)
         if self.use_cosine_similarity_constraint and self.lambda_sim_up_init is not None:
             self.lambda_sim_up = torch.tensor(self.lambda_sim_up_init, requires_grad=False)
+
+        # Reset Augmented Lagrangian penalty parameters (ρ) at the start of each round
+        if self.use_lagrangian_dual and self.use_augmented_lagrangian:
+            if self.rho_dist_init is not None:
+                self.rho_dist = torch.tensor(self.rho_dist_init, requires_grad=False)
+            if self.use_cosine_similarity_constraint:
+                if self.rho_sim_low_init is not None:
+                    self.rho_sim_low = torch.tensor(self.rho_sim_low_init, requires_grad=False)
+                if self.rho_sim_up_init is not None:
+                    self.rho_sim_up = torch.tensor(self.rho_sim_up_init, requires_grad=False)
+
+            # Reset per-round violation history (avoid cross-round coupling)
+            self._prev_violation_dist = None
+            self._prev_violation_sim_low = None
+            self._prev_violation_sim_up = None
 
     def receive_benign_updates(self, updates: List[torch.Tensor], client_ids: Optional[List[int]] = None):
         """
@@ -1534,7 +1579,18 @@ class AttackerClient(Client):
                               lambda_sim_low_init: float = 0.1,
                               lambda_sim_up_init: float = 0.1,
                               lambda_sim_low_lr: float = 0.01,
-                              lambda_sim_up_lr: float = 0.01):
+                              lambda_sim_up_lr: float = 0.01,
+                              # ========== Augmented Lagrangian (ALM) parameters ==========
+                              use_augmented_lagrangian: bool = False,
+                              lambda_update_mode: str = "classic",
+                              rho_dist_init: float = 1.0,
+                              rho_sim_low_init: float = 1.0,
+                              rho_sim_up_init: float = 1.0,
+                              rho_adaptive: bool = True,
+                              rho_theta: float = 0.5,
+                              rho_increase_factor: float = 2.0,
+                              rho_min: float = 1e-3,
+                              rho_max: float = 1e3):
         """
         Set Lagrangian Dual parameters (initialized according to paper Algorithm 1)
         
@@ -1581,11 +1637,63 @@ class AttackerClient(Client):
                 self.lambda_sim_up = None
                 self.lambda_sim_low_init = None
                 self.lambda_sim_up_init = None
+
+            # ===================== ALM parameters =====================
+            # ALM is meaningful only when using Lagrangian framework (use_lagrangian_dual=True).
+            self.use_augmented_lagrangian = bool(use_augmented_lagrangian)
+            self.lambda_update_mode = str(lambda_update_mode or "classic").lower()
+            if self.lambda_update_mode not in ("classic", "alm"):
+                raise ValueError(f"Invalid lambda_update_mode={lambda_update_mode!r}, expected 'classic' or 'alm'")
+
+            # Penalty parameters ρ (must be positive)
+            self.rho_adaptive = bool(rho_adaptive)
+            self.rho_theta = float(rho_theta)
+            self.rho_increase_factor = float(rho_increase_factor)
+            self.rho_min = float(rho_min)
+            self.rho_max = float(rho_max)
+
+            if self.use_augmented_lagrangian:
+                self.rho_dist_init = max(self.rho_min, float(rho_dist_init))
+                self.rho_dist = torch.tensor(self.rho_dist_init, requires_grad=False)
+                if self.use_cosine_similarity_constraint:
+                    self.rho_sim_low_init = max(self.rho_min, float(rho_sim_low_init))
+                    self.rho_sim_low = torch.tensor(self.rho_sim_low_init, requires_grad=False)
+                    self.rho_sim_up_init = max(self.rho_min, float(rho_sim_up_init))
+                    self.rho_sim_up = torch.tensor(self.rho_sim_up_init, requires_grad=False)
+                else:
+                    self.rho_sim_low = None
+                    self.rho_sim_up = None
+                    self.rho_sim_low_init = None
+                    self.rho_sim_up_init = None
+            else:
+                # Standard Lagrangian only (no quadratic penalty)
+                self.rho_dist = None
+                self.rho_sim_low = None
+                self.rho_sim_up = None
+                self.rho_dist_init = None
+                self.rho_sim_low_init = None
+                self.rho_sim_up_init = None
+
+            # Reset per-round violation history for ρ update
+            self._prev_violation_dist = None
+            self._prev_violation_sim_low = None
+            self._prev_violation_sim_up = None
         else:
             # Hard constraint mode (Lagrangian disabled)
             self.lambda_dist = None
             self.lambda_dist_init = None
             self.use_cosine_similarity_constraint = False
+            # Disable ALM as well
+            self.use_augmented_lagrangian = False
+            self.rho_dist = None
+            self.rho_sim_low = None
+            self.rho_sim_up = None
+            self.rho_dist_init = None
+            self.rho_sim_low_init = None
+            self.rho_sim_up_init = None
+            self._prev_violation_dist = None
+            self._prev_violation_sim_low = None
+            self._prev_violation_sim_up = None
 
     def _aggregate_update_no_beta(self, malicious_update: torch.Tensor, 
                                    benign_updates: List[torch.Tensor] = None,
@@ -3111,9 +3219,9 @@ class AttackerClient(Client):
                     lambda_sim_low_tensor = self.lambda_sim_low
                     lambda_sim_up_tensor = self.lambda_sim_up
                     
-                    # Similarity Lagrangian terms (NO ReLU here, standard Lagrangian)
-                    # sim_lagr_term = λ_sim_low * g_sim_low + λ_sim_up * g_sim_up
-                    sim_lagr_term = lambda_sim_low_tensor * g_sim_low + lambda_sim_up_tensor * g_sim_up
+                # Similarity Lagrangian terms (NO ReLU here, standard Lagrangian)
+                # sim_lagr_term = λ_sim_low * g_sim_low + λ_sim_up * g_sim_up
+                sim_lagr_term = lambda_sim_low_tensor * g_sim_low + lambda_sim_up_tensor * g_sim_up
                 
                 
                 # ============================================================
@@ -3130,7 +3238,34 @@ class AttackerClient(Client):
                 # 
                 # When constraint satisfied (g <= 0): Lagrangian term < 0 (rewards satisfaction)
                 # When constraint violated (g > 0): Lagrangian term > 0 (penalizes violation)
-                lagrangian_objective = -global_loss + dist_lagr_term + sim_lagr_term
+                # ============================================================
+                # Build (Augmented) Lagrangian objective
+                #
+                # Standard Lagrangian:
+                #   minimize  -F(w'_g) + Σ_i λ_i g_i
+                #
+                # Standard Augmented Lagrangian (ALM):
+                #   minimize  -F(w'_g) + Σ_i [ λ_i g_i + (ρ_i/2) g_i^2 ]
+                #
+                # NOTE:
+                # - We keep the same reference-point separation:
+                #   objective global_loss uses include_current_attacker=True,
+                #   constraints g_i use include_current_attacker=False (stable reference).
+                # ============================================================
+                if self.use_augmented_lagrangian:
+                    # Keep penalty parameters on the same device
+                    rho_dist = self.rho_dist.to(target_device) if isinstance(self.rho_dist, torch.Tensor) else torch.tensor(float(self.rho_dist or 0.0), device=target_device)
+                    aug_term = (rho_dist / 2.0) * (g_dist ** 2)
+
+                    # Similarity quadratic penalties (two-sided, two ρ's)
+                    if self.use_cosine_similarity_constraint:
+                        rho_sim_low = self.rho_sim_low.to(target_device) if isinstance(self.rho_sim_low, torch.Tensor) else torch.tensor(float(self.rho_sim_low or 0.0), device=target_device)
+                        rho_sim_up = self.rho_sim_up.to(target_device) if isinstance(self.rho_sim_up, torch.Tensor) else torch.tensor(float(self.rho_sim_up or 0.0), device=target_device)
+                        aug_term = aug_term + (rho_sim_low / 2.0) * (g_sim_low ** 2) + (rho_sim_up / 2.0) * (g_sim_up ** 2)
+
+                    lagrangian_objective = -global_loss + dist_lagr_term + sim_lagr_term + aug_term
+                else:
+                    lagrangian_objective = -global_loss + dist_lagr_term + sim_lagr_term
                 
                 # ============================================================
                 # Compute constraint violations (for dual ascent updates, using ReLU)
@@ -3341,7 +3476,14 @@ class AttackerClient(Client):
                     # - If constraint is violated (g_dist > 0): λ_dist increases
                     # - If constraint is satisfied (g_dist < 0): λ_dist decreases (clamped to ≥ 0)
                     g_dist_val = dist_att_val - dist_bound_val
-                    new_lambda_dist = lambda_dist_val + self.lambda_dist_lr * g_dist_val
+                    # Two λ update modes:
+                    # - "classic": λ += lr * g   (current implementation)
+                    # - "alm":     λ += ρ * g    (standard ALM-style multiplier update)
+                    if self.use_augmented_lagrangian and self.lambda_update_mode == "alm":
+                        rho_dist_val = float(self.rho_dist.item() if isinstance(self.rho_dist, torch.Tensor) else (self.rho_dist or 0.0))
+                        new_lambda_dist = lambda_dist_val + rho_dist_val * g_dist_val
+                    else:
+                        new_lambda_dist = lambda_dist_val + self.lambda_dist_lr * g_dist_val
                     new_lambda_dist = max(0.0, new_lambda_dist)  # Ensure non-negative
                     # OPTIMIZATION 5: Keep multiplier on same device when updating
                     self.lambda_dist = torch.tensor(new_lambda_dist, device=target_device, requires_grad=False)
@@ -3362,14 +3504,70 @@ class AttackerClient(Client):
                             # Standard dual ascent update (independently for each constraint)
                             # λ_sim_low(t+1) = max(0, λ_sim_low(t) + α * g_sim_low)
                             # λ_sim_up(t+1) = max(0, λ_sim_up(t) + α * g_sim_up)
-                            new_lambda_sim_low = lambda_sim_low_val + self.lambda_sim_low_lr * g_sim_low_val
+                            if self.use_augmented_lagrangian and self.lambda_update_mode == "alm":
+                                rho_sim_low_val = float(self.rho_sim_low.item() if isinstance(self.rho_sim_low, torch.Tensor) else (self.rho_sim_low or 0.0))
+                                new_lambda_sim_low = lambda_sim_low_val + rho_sim_low_val * g_sim_low_val
+                            else:
+                                new_lambda_sim_low = lambda_sim_low_val + self.lambda_sim_low_lr * g_sim_low_val
                             new_lambda_sim_low = max(0.0, new_lambda_sim_low)
                             
-                            new_lambda_sim_up = lambda_sim_up_val + self.lambda_sim_up_lr * g_sim_up_val
+                            if self.use_augmented_lagrangian and self.lambda_update_mode == "alm":
+                                rho_sim_up_val = float(self.rho_sim_up.item() if isinstance(self.rho_sim_up, torch.Tensor) else (self.rho_sim_up or 0.0))
+                                new_lambda_sim_up = lambda_sim_up_val + rho_sim_up_val * g_sim_up_val
+                            else:
+                                new_lambda_sim_up = lambda_sim_up_val + self.lambda_sim_up_lr * g_sim_up_val
                             new_lambda_sim_up = max(0.0, new_lambda_sim_up)
                             
                             self.lambda_sim_low = torch.tensor(new_lambda_sim_low, device=target_device, requires_grad=False)
                             self.lambda_sim_up = torch.tensor(new_lambda_sim_up, device=target_device, requires_grad=False)
+
+                    # ============================================================
+                    # Augmented Lagrangian penalty update (ρ) - monotone strategy
+                    #
+                    # For each constraint i:
+                    #   σ_i = max(0, g_i)
+                    #   if prev exists and σ_i > rho_theta * prev: increase ρ_i
+                    #   else keep ρ_i unchanged
+                    #
+                    # We update ρ based on g values computed BEFORE the step
+                    # (consistent with the gradient/objective used for this iteration).
+                    # ============================================================
+                    if self.use_augmented_lagrangian and self.rho_adaptive:
+                        theta = float(self.rho_theta)
+                        inc = float(self.rho_increase_factor)
+                        rho_min = float(self.rho_min)
+                        rho_max = float(self.rho_max)
+
+                        # Distance constraint
+                        sigma_dist = max(0.0, float(g_dist_val))
+                        if self.rho_dist is not None:
+                            prev = self._prev_violation_dist
+                            rho_val = float(self.rho_dist.item() if isinstance(self.rho_dist, torch.Tensor) else self.rho_dist)
+                            if prev is not None and sigma_dist > theta * prev:
+                                rho_val = min(rho_max, max(rho_min, rho_val * inc))
+                                self.rho_dist = torch.tensor(rho_val, device=target_device, requires_grad=False)
+                            self._prev_violation_dist = sigma_dist
+
+                        # Similarity constraints (two-sided)
+                        if self.use_cosine_similarity_constraint:
+                            sigma_low = max(0.0, float(g_sim_low_val))
+                            sigma_up = max(0.0, float(g_sim_up_val))
+
+                            if self.rho_sim_low is not None:
+                                prev = self._prev_violation_sim_low
+                                rho_val = float(self.rho_sim_low.item() if isinstance(self.rho_sim_low, torch.Tensor) else self.rho_sim_low)
+                                if prev is not None and sigma_low > theta * prev:
+                                    rho_val = min(rho_max, max(rho_min, rho_val * inc))
+                                    self.rho_sim_low = torch.tensor(rho_val, device=target_device, requires_grad=False)
+                                self._prev_violation_sim_low = sigma_low
+
+                            if self.rho_sim_up is not None:
+                                prev = self._prev_violation_sim_up
+                                rho_val = float(self.rho_sim_up.item() if isinstance(self.rho_sim_up, torch.Tensor) else self.rho_sim_up)
+                                if prev is not None and sigma_up > theta * prev:
+                                    rho_val = min(rho_max, max(rho_min, rho_val * inc))
+                                    self.rho_sim_up = torch.tensor(rho_val, device=target_device, requires_grad=False)
+                                self._prev_violation_sim_up = sigma_up
                     
                     # Logging: Print every step with multiplier values (before and after update)
                     # Track all multipliers and constraint values
@@ -3380,6 +3578,11 @@ class AttackerClient(Client):
                               f"g_dist={g_dist_val:.4f}, " \
                               f"λ_dist({lambda_dist_val:.4f}→{new_lambda_dist:.4f}), " \
                               f"loss={global_loss.item():.4f}, grad_norm={grad_norm:.4f}"
+
+                    # Add ρ info when using ALM
+                    if self.use_augmented_lagrangian:
+                        rho_dist_val_log = float(self.rho_dist.item() if isinstance(self.rho_dist, torch.Tensor) else (self.rho_dist or 0.0))
+                        log_msg += f", ρ_dist={rho_dist_val_log:.4f}"
                     
                     # Add similarity constraint info if enabled
                     if self.use_cosine_similarity_constraint and cached_benign_sim_stats is not None:
@@ -3404,6 +3607,10 @@ class AttackerClient(Client):
                                    f"λ_sim_low({lambda_sim_low_val:.4f}→{new_lambda_sim_low:.4f}), " \
                                    f"λ_sim_up({lambda_sim_up_val:.4f}→{new_lambda_sim_up:.4f}), " \
                                    f"g_low={g_sim_low_val:.4f}, g_up={g_sim_up_val:.4f}"
+                        if self.use_augmented_lagrangian:
+                            rho_sim_low_val_log = float(self.rho_sim_low.item() if isinstance(self.rho_sim_low, torch.Tensor) else (self.rho_sim_low or 0.0))
+                            rho_sim_up_val_log = float(self.rho_sim_up.item() if isinstance(self.rho_sim_up, torch.Tensor) else (self.rho_sim_up or 0.0))
+                            log_msg += f", ρ_sim_low={rho_sim_low_val_log:.4f}, ρ_sim_up={rho_sim_up_val_log:.4f}"
                     print(log_msg)
                     
                     # ============================================================

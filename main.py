@@ -230,7 +230,18 @@ def setup_experiment(config):
                     lambda_sim_low_init=config.get('lambda_sim_low_init', config.get('lambda_sim_init', 0.1)),
                     lambda_sim_up_init=config.get('lambda_sim_up_init', config.get('lambda_sim_init', 0.1)),
                     lambda_sim_low_lr=config.get('lambda_sim_low_lr', config.get('lambda_sim_lr', 0.01)),
-                    lambda_sim_up_lr=config.get('lambda_sim_up_lr', config.get('lambda_sim_lr', 0.01))
+                    lambda_sim_up_lr=config.get('lambda_sim_up_lr', config.get('lambda_sim_lr', 0.01)),
+                    # ========== Augmented Lagrangian (ALM) parameters ==========
+                    use_augmented_lagrangian=config.get('use_augmented_lagrangian', False),
+                    lambda_update_mode=config.get('lambda_update_mode', 'classic'),
+                    rho_dist_init=config.get('rho_dist_init', 1.0),
+                    rho_sim_low_init=config.get('rho_sim_low_init', 1.0),
+                    rho_sim_up_init=config.get('rho_sim_up_init', 1.0),
+                    rho_adaptive=config.get('rho_adaptive', True),
+                    rho_theta=config.get('rho_theta', 0.5),
+                    rho_increase_factor=config.get('rho_increase_factor', 2.0),
+                    rho_min=config.get('rho_min', 1e-3),
+                    rho_max=config.get('rho_max', 1e3),
                 )
                 print(f"    Lagrangian Dual enabled: λ_dist(1)={config.get('lambda_dist_init', config.get('lambda_init', 0.1))}")
             else:
@@ -651,6 +662,21 @@ def main():
         'lambda_sim_up_init': 0.1,   # Initial λ_sim_up(t) value for upper bound constraint: sim_att <= sim_bound_up
         'lambda_sim_low_lr': 0.1,    # Learning rate for λ_sim_low(t) update
         'lambda_sim_up_lr': 0.1,     # Learning rate for λ_sim_up(t) update
+
+        # ========== Augmented Lagrangian Method (ALM) Parameters ==========
+        # Standard ALM adds quadratic penalties: (ρ/2) * g(x)^2 for each inequality constraint g(x) ≤ 0.
+        'use_augmented_lagrangian': True,   # Enable Augmented Lagrangian (requires use_lagrangian_dual=True)
+        'lambda_update_mode': 'classic',    # "classic": λ += lr*g ; "alm": λ += ρ*g
+        # Penalty parameters ρ (per-constraint)
+        'rho_dist_init': 1.0,
+        'rho_sim_low_init': 1.0,
+        'rho_sim_up_init': 1.0,
+        # Adaptive ρ update (monotone increase)
+        'rho_adaptive': True,
+        'rho_theta': 0.5,            # If σ_k > theta * σ_{k-1} then increase ρ
+        'rho_increase_factor': 2.0,
+        'rho_min': 1e-3,
+        'rho_max': 1e3,
         
         # ========== Proxy Loss Estimation Parameters ==========
         'proxy_sample_size': 512,  # Number of samples in proxy dataset for F(w'_g) estimation (int)
