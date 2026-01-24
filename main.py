@@ -605,10 +605,10 @@ def main():
         'batch_size': 128,  # Batch size for local training (int)
         'test_batch_size': 512,  # Batch size for test/validation data loaders (int)
         'local_epochs': 5,  # Number of local training epochs per round (int, per paper Section IV)
-        'alpha': 0.1,  # Proximal regularization coefficient μ (FedProx standard: (μ/2) * ||w - w_t||²)
+        'alpha': 0.0,  # FedProx proximal coefficient μ: loss += (μ/2)*||w - w_global||². Set 0 for standard FedAvg, >0 to penalize local drift from global model (helps Non-IID stability)
         
         # ========== Data Distribution ==========
-        'dirichlet_alpha': 10000,  # Make data less extreme non-IID (higher alpha = more balanced)
+        'dirichlet_alpha': 0.3,  # Make data less extreme non-IID (higher alpha = more balanced)
         # 'dataset_size_limit': None,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
         'dataset_size_limit': 20000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
         # 'dataset_size_limit': 10000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
@@ -634,10 +634,10 @@ def main():
         'vgae_lr': 0.01,  # Learning rate for VGAE optimizer (reference: 0.01)
         'vgae_hidden_dim': 64,  # VGAE hidden layer dimension (per paper: hidden1_dim=32)
         'vgae_latent_dim': 32,  # VGAE latent space dimension (per paper: hidden2_dim=16)
-        'vgae_dropout': 0,  # VGAE dropout rate (float, 0.0-1.0)
-        'vgae_kl_weight': 0.1,  # Weight for KL divergence term in VGAE loss (float, default: 0.1)
+        'vgae_dropout': 0,  # VGAE encoder dropout rate (0=no dropout, higher=more regularization to prevent overfitting)
+        'vgae_kl_weight': 0.1,  # KL divergence weight in VGAE loss: L = L_recon + kl_weight * KL(q||p). Higher=stronger latent regularization
         # ========== Graph Construction Parameters ==========
-        'graph_threshold': 0.5,  # Threshold for graph adjacency matrix binarization in VGAE (float, 0.0-1.0)
+        'graph_threshold': 0.5,  # Cosine similarity threshold for adjacency matrix: A[i,j]=1 if sim(Δ_i,Δ_j)>threshold, else 0. Higher=sparser graph
 
         # ========== Attack Configuration ==========
         'attack_start_round': 0,  # Round when attack phase starts (int, now all rounds use complete poisoning)
@@ -668,8 +668,8 @@ def main():
         # ========== Augmented Lagrangian Method (ALM) Parameters ==========
         # Standard ALM adds quadratic penalties: (ρ/2) * g(x)^2 for each inequality constraint g(x) ≤ 0.
         'use_augmented_lagrangian': True,   # Enable Augmented Lagrangian (requires use_lagrangian_dual=True)
-        'lambda_update_mode': 'classic',    # "classic": λ += lr*g ; "alm": λ += ρ*g
-        # Penalty parameters ρ (per-constraint)
+        'lambda_update_mode': 'classic',    # Dual variable update: "classic"=λ += lr*g (fixed step), "alm"=λ += ρ*g (penalty-scaled step, standard ALM)
+        # Penalty parameters ρ (per-constraint): controls quadratic penalty strength (ρ/2)*max(0,g)^2 in ALM objective
         'rho_dist_init': 1.0,
         'rho_sim_low_init': 1.0,
         'rho_sim_up_init': 1.0,
