@@ -608,7 +608,7 @@ def main():
         'alpha': 0.1,  # Proximal regularization coefficient μ (FedProx standard: (μ/2) * ||w - w_t||²)
         
         # ========== Data Distribution ==========
-        'dirichlet_alpha': 0.3,  # Make data less extreme non-IID (higher alpha = more balanced)
+        'dirichlet_alpha': 10000,  # Make data less extreme non-IID (higher alpha = more balanced)
         # 'dataset_size_limit': None,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
         'dataset_size_limit': 20000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
         # 'dataset_size_limit': 10000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
