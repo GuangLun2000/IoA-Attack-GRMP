@@ -64,7 +64,7 @@ class DataManager:
 
     def __init__(self, num_clients, num_attackers, test_seed,
                  dataset_size_limit=None, batch_size=None, test_batch_size=None,
-                 model_name: str = "distilbert-base-uncased"):
+                 model_name: str = "distilbert-base-uncased", max_length: int = 128):
         
         """
         Initialize DataManager for AG News dataset.
@@ -79,6 +79,7 @@ class DataManager:
             batch_size: Batch size for training data loaders (required, provided via main.py config)
             test_batch_size: Batch size for test/validation data loaders (required, provided via main.py config)
             model_name: Hugging Face model name for tokenizer initialization
+            max_length: Max token length for tokenizer (AG News: 128, IMDB: 256-512)
         """
 
         if batch_size is None or test_batch_size is None:
@@ -90,6 +91,7 @@ class DataManager:
         self.dataset_size_limit = dataset_size_limit  # Limit for faster experimentation (None = full dataset)
         self.batch_size = batch_size  # Batch size for training data loaders
         self.test_batch_size = test_batch_size  # Batch size for test data loaders
+        self.max_length = max_length  # Max token length for tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
 
         print("Loading AG News dataset...")
@@ -187,7 +189,7 @@ class DataManager:
 
     def get_empty_loader(self) -> DataLoader:
         """Return an empty loader for data-agnostic attackers."""
-        return DataLoader(NewsDataset([], [], self.tokenizer), batch_size=self.batch_size, shuffle=False)
+        return DataLoader(NewsDataset([], [], self.tokenizer, max_length=self.max_length), batch_size=self.batch_size, shuffle=False)
 
     def get_proxy_eval_loader(self, sample_size: int = 128) -> DataLoader:
         """
@@ -200,11 +202,11 @@ class DataManager:
         idx = rng.choice(len(self.test_texts), size=min(sample_size, len(self.test_texts)), replace=False)
         proxy_texts = [self.test_texts[i] for i in idx]
         proxy_labels = [self.test_labels[i] for i in idx]
-        dataset = NewsDataset(proxy_texts, proxy_labels, self.tokenizer)
+        dataset = NewsDataset(proxy_texts, proxy_labels, self.tokenizer, max_length=self.max_length)
         return DataLoader(dataset, batch_size=self.test_batch_size, shuffle=False)
 
     def get_test_loader(self) -> DataLoader:
         """Get clean global test loader"""
-        test_dataset = NewsDataset(self.test_texts, self.test_labels, self.tokenizer)
+        test_dataset = NewsDataset(self.test_texts, self.test_labels, self.tokenizer, max_length=self.max_length)
         return DataLoader(test_dataset, batch_size=self.test_batch_size, shuffle=False)
 

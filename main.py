@@ -49,7 +49,8 @@ def setup_experiment(config):
         dataset_size_limit=config['dataset_size_limit'],
         batch_size=config['batch_size'],
         test_batch_size=config['test_batch_size'],
-        model_name=config.get('model_name', 'distilbert-base-uncased')
+        model_name=config.get('model_name', 'distilbert-base-uncased'),
+        max_length=config.get('max_length', 128)
     )
 
     # 2. Partition data among clients (Non-IID distribution per paper)
@@ -161,7 +162,8 @@ def setup_experiment(config):
             client_labels = [data_manager.train_labels[i] for i in client_indices[client_id]]
             
             # Create static dataloader for benign client
-            dataset = NewsDataset(client_texts, client_labels, data_manager.tokenizer)
+            dataset = NewsDataset(client_texts, client_labels, data_manager.tokenizer, 
+                                  max_length=config.get('max_length', 128))
             client_loader = DataLoader(dataset, batch_size=config['batch_size'], shuffle=True)
 
             print(f"  Client {client_id}: BENIGN ({len(client_indices[client_id])} samples)")
@@ -624,8 +626,9 @@ def main():
         'lora_target_modules': None,  # None = use default for DistilBERT (["q_lin", "k_lin", "v_lin", "out_lin"])
         # Model configuration
         'model_name': 'distilbert-base-uncased',  # Hugging Face model name for classification
-        'num_labels': 4,  # Number of classification labels
-                
+        'num_labels': 4,  # Number of classification labels (AG News: 4, IMDB: 2)
+        'max_length': 128,  # Max token length for tokenizer. AG News: 128 (avg ~50 tokens), IMDB: 256-512 (avg ~230 tokens)
+        
         # ========== VGAE Training Parameters ==========
         # Reference paper: input_dim=5, hidden1_dim=32, hidden2_dim=16, num_epoch=10, lr=0.01
         # Note: dim_reduction_size should be <= total trainable parameters
