@@ -1,6 +1,10 @@
 # models.py
 # This module defines the NewsClassifierModel for News classification
 # and the VGAE model for GRMP attack.
+#
+# Supported Model Architectures:
+# - Encoder-only (BERT-style): distilbert-base-uncased, bert-base-uncased, roberta-base, deberta-v3-base
+# - Decoder-only (GPT-style): EleutherAI/pythia-160m, EleutherAI/pythia-1b, facebook/opt-125m, gpt2
 
 import torch
 import torch.nn as nn
@@ -11,6 +15,33 @@ from typing import Tuple, Optional
 # --- Constants ---
 MODEL_NAME = 'distilbert-base-uncased'
 NUM_LABELS = 4
+
+# --- Model Architecture Detection ---
+def get_model_architecture(model_name: str) -> str:
+    """
+    Detect model architecture type based on model name.
+    
+    Returns:
+        'encoder': BERT-style bidirectional models
+        'decoder': GPT-style causal/autoregressive models
+        'encoder-decoder': T5-style seq2seq models
+    """
+    model_name_lower = model_name.lower()
+    
+    # Decoder-only models (GPT-style)
+    decoder_patterns = ['pythia', 'gpt', 'opt-', 'llama', 'bloom', 'falcon', 'mistral', 'phi-', 'qwen']
+    for pattern in decoder_patterns:
+        if pattern in model_name_lower:
+            return 'decoder'
+    
+    # Encoder-decoder models (T5-style)
+    enc_dec_patterns = ['t5', 'bart', 'pegasus', 'marian']
+    for pattern in enc_dec_patterns:
+        if pattern in model_name_lower:
+            return 'encoder-decoder'
+    
+    # Default: Encoder-only (BERT-style)
+    return 'encoder'
 
 # Optional LoRA support
 try:
@@ -23,9 +54,14 @@ except ImportError:
 
 class NewsClassifierModel(nn.Module):
     """
-    DistilBERT-based model for news classification.
+    Transformer-based model for news classification.
+    Supports both Encoder-only (BERT-style) and Decoder-only (GPT-style) architectures.
     Supports both full fine-tuning and LoRA fine-tuning modes.
     Wraps the Hugging Face AutoModelForSequenceClassification.
+    
+    Supported Models:
+        - Encoder-only: distilbert-base-uncased, bert-base-uncased, roberta-base, deberta-v3-base
+        - Decoder-only: EleutherAI/pythia-160m, EleutherAI/pythia-1b, facebook/opt-125m, gpt2
     
     Args:
         model_name: Pre-trained model name or path
@@ -45,12 +81,20 @@ class NewsClassifierModel(nn.Module):
         self.use_lora = use_lora
         self.model_name = model_name
         self.num_labels = num_labels
+        self.architecture = get_model_architecture(model_name)
         
         # Load base model
+        # For decoder-only models, we need to set pad_token_id to avoid warnings
         self.model = AutoModelForSequenceClassification.from_pretrained(
             model_name,
             num_labels=num_labels
         )
+        
+        # For decoder-only models (GPT-style), set pad_token_id if not set
+        if self.architecture == 'decoder':
+            if self.model.config.pad_token_id is None:
+                # Use eos_token_id as pad_token_id (common practice for GPT-style models)
+                self.model.config.pad_token_id = self.model.config.eos_token_id
         
         # Verify that the correct model is loaded
         model_type = type(self.model).__name__
@@ -66,8 +110,29 @@ class NewsClassifierModel(nn.Module):
             if lora_target_modules is None:
                 model_name_lower = model_name.lower()
                 
+                # ========== Decoder-only Models (GPT-style) ==========
+                # Pythia / GPT-NeoX uses fused QKV attention
+                if "pythia" in model_name_lower or "gpt-neox" in model_name_lower:
+                    lora_target_modules = ["query_key_value"]
+                # OPT uses separate projections
+                elif "opt-" in model_name_lower or "/opt" in model_name_lower:
+                    lora_target_modules = ["q_proj", "k_proj", "v_proj", "out_proj"]
+                # GPT-2 uses c_attn (fused) and c_proj
+                elif "gpt2" in model_name_lower:
+                    lora_target_modules = ["c_attn", "c_proj"]
+                # LLaMA / Mistral style
+                elif "llama" in model_name_lower or "mistral" in model_name_lower:
+                    lora_target_modules = ["q_proj", "k_proj", "v_proj", "o_proj"]
+                # Bloom
+                elif "bloom" in model_name_lower:
+                    lora_target_modules = ["query_key_value"]
+                # Falcon
+                elif "falcon" in model_name_lower:
+                    lora_target_modules = ["query_key_value"]
+                
+                # ========== Encoder-only Models (BERT-style) ==========
                 # DistilBERT uses these module names for attention layers
-                if "distilbert" in model_name_lower:
+                elif "distilbert" in model_name_lower:
                     lora_target_modules = ["q_lin", "k_lin", "v_lin", "out_lin"]
                 # DeBERTa v2/v3 uses projection module names in attention
                 elif "deberta" in model_name_lower:
@@ -103,20 +168,41 @@ class NewsClassifierModel(nn.Module):
         self._initialize_weights()
 
     def _initialize_weights(self):
-        """Initialize classifier weights to avoid initial bias."""
+        """
+        Initialize classifier weights to avoid initial bias.
+        
+        Note: Different model architectures use different classifier head names:
+        - BERT-style (Encoder): 'classifier'
+        - GPT-style (Decoder): 'score' (e.g., GPT2ForSequenceClassification, GPTNeoXForSequenceClassification)
+        """
         with torch.no_grad():
+            # Determine the classifier head name based on architecture
+            # GPT-style models use 'score', BERT-style use 'classifier'
+            classifier_names = ['classifier', 'score']
+            
             # In LoRA mode, model structure may be different (PEFT wrapper)
             # Try to access classifier from base_model if using PEFT
             if self.use_lora and hasattr(self.model, 'base_model'):
                 # PEFT model: access through base_model
                 base_model = self.model.base_model.model
-                if hasattr(base_model, 'classifier'):
-                    nn.init.xavier_uniform_(base_model.classifier.weight)
-                    nn.init.zeros_(base_model.classifier.bias)
-            elif hasattr(self.model, 'classifier'):
+                for cls_name in classifier_names:
+                    if hasattr(base_model, cls_name):
+                        classifier = getattr(base_model, cls_name)
+                        if hasattr(classifier, 'weight'):
+                            nn.init.xavier_uniform_(classifier.weight)
+                        if hasattr(classifier, 'bias') and classifier.bias is not None:
+                            nn.init.zeros_(classifier.bias)
+                        break
+            else:
                 # Standard model: direct access
-                nn.init.xavier_uniform_(self.model.classifier.weight)
-                nn.init.zeros_(self.model.classifier.bias)
+                for cls_name in classifier_names:
+                    if hasattr(self.model, cls_name):
+                        classifier = getattr(self.model, cls_name)
+                        if hasattr(classifier, 'weight'):
+                            nn.init.xavier_uniform_(classifier.weight)
+                        if hasattr(classifier, 'bias') and classifier.bias is not None:
+                            nn.init.zeros_(classifier.bias)
+                        break
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         """Forward pass returning logits."""

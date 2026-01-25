@@ -92,7 +92,22 @@ class DataManager:
         self.batch_size = batch_size  # Batch size for training data loaders
         self.test_batch_size = test_batch_size  # Batch size for test data loaders
         self.max_length = max_length  # Max token length for tokenizer
+        self.model_name = model_name  # Store model name for reference
+        
+        # Load tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        
+        # Handle padding for decoder-only models (GPT-style)
+        # These models (GPT2, Pythia, OPT, LLaMA, etc.) don't have a pad_token by default
+        # We set pad_token = eos_token to enable batch processing
+        if self.tokenizer.pad_token is None:
+            if self.tokenizer.eos_token is not None:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
+                print(f"  📝 Set pad_token = eos_token ('{self.tokenizer.eos_token}') for {model_name}")
+            else:
+                # Fallback: add a new pad token
+                self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+                print(f"  📝 Added new pad_token '[PAD]' for {model_name}")
 
         print("Loading AG News dataset...")
         self._load_data()

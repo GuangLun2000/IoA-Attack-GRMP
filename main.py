@@ -162,10 +162,11 @@ def setup_experiment(config):
 
     # 4. Initialize Global Model
     use_lora = config.get('use_lora', False)
+    model_name = config.get('model_name', 'distilbert-base-uncased')
     if use_lora:
-        print("Initializing global model (DistilBERT) with LoRA...")
+        print(f"Initializing global model ({model_name}) with LoRA...")
         global_model = NewsClassifierModel(
-            model_name=config.get('model_name', 'distilbert-base-uncased'),
+            model_name=model_name,
             num_labels=config.get('num_labels', 4),
             use_lora=True,
             lora_r=config.get('lora_r', 16),
@@ -174,9 +175,9 @@ def setup_experiment(config):
             lora_target_modules=config.get('lora_target_modules', None)
         )
     else:
-        print("Initializing global model (DistilBERT) [Full Fine-tuning]...")
+        print(f"Initializing global model ({model_name}) [Full Fine-tuning]...")
         global_model = NewsClassifierModel(
-            model_name=config.get('model_name', 'distilbert-base-uncased'),
+            model_name=model_name,
             num_labels=config.get('num_labels', 4),
             use_lora=False
         )
@@ -670,7 +671,11 @@ def main():
         'lora_dropout': 0.1,  # LoRA dropout rate
         'lora_target_modules': None,  # None = use default for DistilBERT (["q_lin", "k_lin", "v_lin", "out_lin"])
         # Model configuration
+        # Supported models:
+        #   Encoder-only (BERT-style): 'distilbert-base-uncased', 'bert-base-uncased', 'roberta-base', 'microsoft/deberta-v3-base'
+        #   Decoder-only (GPT-style):  'EleutherAI/pythia-160m', 'EleutherAI/pythia-1b', 'facebook/opt-125m', 'gpt2'
         'model_name': 'distilbert-base-uncased',  # Hugging Face model name for classification
+        # 'model_name': 'EleutherAI/pythia-160m',  # Alternative: Pythia-160M (Decoder-only, 160M params)
         'num_labels': 4,  # Number of classification labels (AG News: 4, IMDB: 2)
         'max_length': 128,  # Max token length for tokenizer. AG News: 128 (avg ~50 tokens), IMDB: 256-512 (avg ~230 tokens)
         
