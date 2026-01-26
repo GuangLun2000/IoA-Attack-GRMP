@@ -674,8 +674,8 @@ def main():
         # Supported models:
         #   Encoder-only (BERT-style): 'distilbert-base-uncased', 'bert-base-uncased', 'roberta-base', 'microsoft/deberta-v3-base'
         #   Decoder-only (GPT-style):  'EleutherAI/pythia-160m', 'EleutherAI/pythia-1b', 'facebook/opt-125m', 'gpt2'
-        'model_name': 'distilbert-base-uncased',  # Hugging Face model name for classification
-        # 'model_name': 'EleutherAI/pythia-160m',  # Alternative: Pythia-160M (Decoder-only, 160M params)
+        # 'model_name': 'distilbert-base-uncased',  # Hugging Face model name for classification
+        'model_name': 'EleutherAI/pythia-160m',  # Alternative: Pythia-160M (Decoder-only, 160M params)
         'num_labels': 4,  # Number of classification labels (AG News: 4, IMDB: 2)
         'max_length': 128,  # Max token length for tokenizer. AG News: 128 (avg ~50 tokens), IMDB: 256-512 (avg ~230 tokens)
         
@@ -683,7 +683,7 @@ def main():
         # Reference paper: input_dim=5, hidden1_dim=32, hidden2_dim=16, num_epoch=10, lr=0.01
         # Note: dim_reduction_size should be <= total trainable parameters
         'dim_reduction_size': 500,  # Reduced dimensionality of LLM parameters (auto-adjusted for LoRA if needed)
-        'vgae_epochs': 20,  # Number of epochs for VGAE training (reference: 10)
+        'vgae_epochs': 30,  # Number of epochs for VGAE training (reference: 20)
         'vgae_lr': 0.01,  # Learning rate for VGAE optimizer (reference: 0.01)
         'vgae_hidden_dim': 64,  # VGAE hidden layer dimension (per paper: hidden1_dim=32)
         'vgae_latent_dim': 32,  # VGAE latent space dimension (per paper: hidden2_dim=16)
@@ -728,10 +728,10 @@ def main():
         'rho_sim_up_init': 1.0,
         # Adaptive ρ update (monotone increase)
         'rho_adaptive': True,
-        'rho_theta': 0.5,            # If σ_k > theta * σ_{k-1} then increase ρ
-        'rho_increase_factor': 2.0,
+        'rho_theta': 0.8,            # If σ_k > theta * σ_{k-1} then increase ρ
+        'rho_increase_factor': 1.5,
         'rho_min': 1e-3,
-        'rho_max': 1e3,
+        'rho_max': 1e4,
         
         # ========== Proxy Loss Estimation Parameters ==========
         'proxy_sample_size': 512,  # Number of samples in proxy dataset for F(w'_g) estimation (int)
