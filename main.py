@@ -700,7 +700,7 @@ def main():
         'proxy_steps': 200,  # Number of optimization steps for attack objective (int)
         'grad_clip_norm': 1.0,  # Gradient clipping norm for training stability (float)
         'attacker_claimed_data_size': None,  # None = use actual assigned data size
-        'early_stop_constraint_stability_steps': 1,  # Early stopping: stop after N consecutive steps satisfying constraint (int)
+        'early_stop_constraint_stability_steps': 5,  # Early stopping: stop after N consecutive steps satisfying constraint (int)
 
         # ========== Formula 4 Constraint Parameters ==========
         'dist_bound': None,  # Distance threshold for constraint (4b): d(w'_j(t), w'_g(t)) ≤ dist_bound (None = use benign max distance)
