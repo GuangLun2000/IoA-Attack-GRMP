@@ -640,7 +640,7 @@ def main():
         
         # ========== Federated Learning Setup ==========
         'num_clients': 7,  # Total number of federated learning clients (int)
-        'num_attackers': 0,  # Number of attacker clients (int, must be < num_clients)
+        'num_attackers': 2,  # Number of attacker clients (int, must be < num_clients)
         'num_benign_clients': None,  # Optional: Explicit number of benign clients for baseline experiment
                                     # If None, baseline will use (num_clients - num_attackers) to ensure fair comparison
                                     # If set, baseline experiment will use exactly this many benign clients
@@ -674,8 +674,8 @@ def main():
         # Supported models:
         #   Encoder-only (BERT-style): 'distilbert-base-uncased', 'bert-base-uncased', 'roberta-base', 'microsoft/deberta-v3-base'
         #   Decoder-only (GPT-style):  'EleutherAI/pythia-160m', 'EleutherAI/pythia-1b', 'facebook/opt-125m', 'gpt2'
-        'model_name': 'distilbert-base-uncased',  # Hugging Face model name for classification
-        # 'model_name': 'EleutherAI/pythia-160m',  # Alternative: Pythia-160M (Decoder-only, 160M params)
+        # 'model_name': 'distilbert-base-uncased',  # Hugging Face model name for classification
+        'model_name': 'EleutherAI/pythia-160m',  # Alternative: Pythia-160M (Decoder-only, 160M params)
         'num_labels': 4,  # Number of classification labels (AG News: 4, IMDB: 2)
         'max_length': 128,  # Max token length for tokenizer. AG News: 128 (avg ~50 tokens), IMDB: 256-512 (avg ~230 tokens)
         
@@ -700,7 +700,7 @@ def main():
         'proxy_steps': 200,  # Number of optimization steps for attack objective (int)
         'grad_clip_norm': 1.0,  # Gradient clipping norm for training stability (float)
         'attacker_claimed_data_size': None,  # None = use actual assigned data size
-        'early_stop_constraint_stability_steps': 5,  # Early stopping: stop after N consecutive steps satisfying constraint (int)
+        'early_stop_constraint_stability_steps': 1,  # Early stopping: stop after N consecutive steps satisfying constraint (int)
 
         # ========== Formula 4 Constraint Parameters ==========
         'dist_bound': None,  # Distance threshold for constraint (4b): d(w'_j(t), w'_g(t)) ≤ dist_bound (None = use benign max distance)
