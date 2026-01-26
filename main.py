@@ -662,7 +662,7 @@ def main():
         # 'dataset_size_limit': 10000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
 
         # ========== Training Mode Configuration ==========
-        'use_lora': False,  # True for LoRA fine-tuning, False for full fine-tuning
+        'use_lora': True,  # True for LoRA fine-tuning, False for full fine-tuning
         # LoRA parameters (only used when use_lora=True)
         # NOTE: Lower r values = faster training but potentially less capacity
         # Recommended: r=8 for speed, r=16 for better performance (default)
@@ -683,7 +683,7 @@ def main():
         # Reference paper: input_dim=5, hidden1_dim=32, hidden2_dim=16, num_epoch=10, lr=0.01
         # Note: dim_reduction_size should be <= total trainable parameters
         'dim_reduction_size': 500,  # Reduced dimensionality of LLM parameters (auto-adjusted for LoRA if needed)
-        'vgae_epochs': 30,  # Number of epochs for VGAE training (reference: 20)
+        'vgae_epochs': 20,  # Number of epochs for VGAE training (reference: 20)
         'vgae_lr': 0.01,  # Learning rate for VGAE optimizer (reference: 0.01)
         'vgae_hidden_dim': 64,  # VGAE hidden layer dimension (per paper: hidden1_dim=32)
         'vgae_latent_dim': 32,  # VGAE latent space dimension (per paper: hidden2_dim=16)
@@ -728,8 +728,8 @@ def main():
         'rho_sim_up_init': 1.0,
         # Adaptive ρ update (monotone increase)
         'rho_adaptive': True,
-        'rho_theta': 0.8,            # If σ_k > theta * σ_{k-1} then increase ρ
-        'rho_increase_factor': 1.5,
+        'rho_theta': 0.5,            # If σ_k > theta * σ_{k-1} then increase ρ
+        'rho_increase_factor': 2.0,
         'rho_min': 1e-3,
         'rho_max': 1e4,
         
