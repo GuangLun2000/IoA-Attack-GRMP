@@ -257,7 +257,9 @@ class AttackerClient(Client):
                  vgae_kl_weight=0.1,
                  proxy_steps=20,
                  grad_clip_norm=1.0,
-                 early_stop_constraint_stability_steps=3):
+                 early_stop_constraint_stability_steps=3,
+                 attack_type='grmp',
+                 fang_stop_threshold=1.0e-5):
         """
         Initialize an attacker client with VGAE-based camouflage capabilities.
         
@@ -285,6 +287,8 @@ class AttackerClient(Client):
             vgae_kl_weight: Weight for KL divergence term in VGAE loss (default: 0.1)
             proxy_steps: Number of optimization steps for attack objective (default: 20)
             grad_clip_norm: Gradient clipping norm for training stability (default: 1.0)
+            attack_type: Type of attack to use ('grmp' for GRMP, 'fang' for Fang Attack, default: 'grmp')
+            fang_stop_threshold: Binary search stopping threshold for Fang Attack (default: 1e-5)
         
         Note: lr, local_epochs, and alpha must be explicitly provided to ensure consistency
         with config settings. Other parameters have defaults but should be set via config in main.py.
@@ -309,6 +313,10 @@ class AttackerClient(Client):
         self.proxy_steps = proxy_steps
         self.grad_clip_norm = grad_clip_norm
         self.early_stop_constraint_stability_steps = early_stop_constraint_stability_steps
+        
+        # Attack type selection (default: 'grmp' for backward compatibility)
+        self.attack_type = attack_type.lower()  # Normalize to lowercase
+        self.fang_stop_threshold = fang_stop_threshold
 
         dummy_loader = data_manager.get_empty_loader()
         super().__init__(client_id, model, dummy_loader, lr, local_epochs, alpha)
@@ -2545,6 +2553,27 @@ class AttackerClient(Client):
 
     def camouflage_update(self, poisoned_update: torch.Tensor) -> torch.Tensor:
         """
+        Generate malicious update based on attack type.
+        
+        Supports:
+        - 'grmp': GRMP Attack using VGAE + GSP (default)
+        - 'fang': Fang Attack (USENIX Security '20)
+        
+        Args:
+            poisoned_update: Zero update (attackers don't train, so this is always zero)
+        
+        Returns:
+            Malicious update generated using selected attack method
+        """
+        # Route to appropriate attack method based on attack_type
+        if self.attack_type == 'fang':
+            return self._fang_attack(poisoned_update)
+        else:
+            # Default: GRMP Attack (original logic, unchanged)
+            return self._grmp_attack(poisoned_update)
+    
+    def _grmp_attack(self, poisoned_update: torch.Tensor) -> torch.Tensor:
+        """
         GRMP Attack using VGAE + GSP (data-agnostic attack).
         
         Attackers are not assigned local data and do not perform local training.
@@ -3868,3 +3897,47 @@ class AttackerClient(Client):
         torch.cuda.empty_cache()
         
         return malicious_update_final
+    
+    def _fang_attack(self, poisoned_update: torch.Tensor) -> torch.Tensor:
+        """
+        Fang Attack (USENIX Security '20) - Generate malicious update.
+        
+        This method calls the Fang Attack implementation from baseline_attack.py
+        to keep the code modular and isolated from GRMP logic.
+        
+        Args:
+            poisoned_update: Zero update (attackers don't train, so this is always zero)
+        
+        Returns:
+            Malicious update generated using Fang Attack
+        """
+        # Import here to avoid circular dependencies
+        try:
+            from baseline_attack import fang_attack_generate_malicious_update
+        except ImportError:
+            raise ImportError(
+                f"[Fang Attack {self.client_id}] Cannot import fang_attack_generate_malicious_update from baseline_attack.py. "
+                "Please ensure baseline_attack.py exists and is in the same directory."
+            )
+        
+        # Get necessary state
+        benign_updates = self.benign_updates
+        other_attacker_updates = getattr(self, 'other_attacker_updates', [])
+        global_model_params = self.global_model_params
+        dist_bound = self.dist_bound
+        
+        # Check prerequisites
+        if global_model_params is None:
+            print(f"    [Fang Attack {self.client_id}] Global model params not set, return zero update")
+            return poisoned_update
+        
+        # Call Fang Attack function
+        return fang_attack_generate_malicious_update(
+            client_id=self.client_id,
+            benign_updates=benign_updates,
+            other_attacker_updates=other_attacker_updates,
+            global_model_params=global_model_params,
+            dist_bound=dist_bound,
+            device=self.device,
+            stop_threshold=self.fang_stop_threshold
+        )

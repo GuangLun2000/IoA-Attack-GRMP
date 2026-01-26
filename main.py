@@ -225,7 +225,11 @@ def setup_experiment(config):
             )
         else:
             # --- Attacker Client ---
-            print(f"  Client {client_id}: ATTACKER (VGAE Enabled)")
+            attack_type = config.get('attack_type', 'grmp')
+            if attack_type == 'fang':
+                print(f"  Client {client_id}: ATTACKER (Fang Attack)")
+            else:
+                print(f"  Client {client_id}: ATTACKER (GRMP Attack - VGAE Enabled)")
             # Use actual assigned data size for claimed_data_size (for fair weighted aggregation)
             # Note: Attackers are data-agnostic (don't use data for training), but use assigned
             # data size for aggregation weight to maintain realistic attack scenario
@@ -264,7 +268,9 @@ def setup_experiment(config):
                 vgae_kl_weight=config['vgae_kl_weight'],
                 proxy_steps=config['proxy_steps'],
                 grad_clip_norm=config['grad_clip_norm'],
-                early_stop_constraint_stability_steps=config.get('early_stop_constraint_stability_steps', 3)
+                early_stop_constraint_stability_steps=config.get('early_stop_constraint_stability_steps', 3),
+                attack_type=config.get('attack_type', 'grmp'),  # 'grmp' or 'fang'
+                fang_stop_threshold=config.get('fang_stop_threshold', 1.0e-5)  # Fang Attack binary search threshold
             )
             
             # Set Lagrangian Dual parameters (if using)
@@ -693,7 +699,9 @@ def main():
         'graph_threshold': 0.5,  # Cosine similarity threshold for adjacency matrix: A[i,j]=1 if sim(Δ_i,Δ_j)>threshold, else 0. Higher=sparser graph
 
         # ========== Attack Configuration ==========
+        'attack_type': 'fang',  # Attack type: 'grmp' for GRMP Attack (default), 'fang' for Fang Attack (USENIX Security '20)
         'attack_start_round': 0,  # Round when attack phase starts (int, now all rounds use complete poisoning)
+        'fang_stop_threshold': 1.0e-5,  # Fang Attack binary search stopping threshold (only used when attack_type='fang')
 
         # ========== Attack Optimization Parameters ==========
         'proxy_step': 0.001,  # Step size for gradient-free ascent toward global-loss proxy
