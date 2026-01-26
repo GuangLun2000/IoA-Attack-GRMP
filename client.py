@@ -3251,14 +3251,8 @@ class AttackerClient(Client):
                 # Standard Lagrangian:
                 #   minimize  -F(w'_g) + Σ_i λ_i g_i
                 #
-                # Standard Augmented Lagrangian (ALM) with Hinge-Squared penalty:
-                #   minimize  -F(w'_g) + Σ_i [ λ_i g_i + (ρ_i/2) max(0, g_i)^2 ]
-                #
-                # Hinge-Squared (Powell-Hestenes-Rockafellar form):
-                # - When g_i <= 0 (constraint satisfied): penalty = 0
-                # - When g_i > 0 (constraint violated): penalty = (ρ/2) g_i^2
-                # This allows the optimizer to freely explore the feasible region
-                # without being pushed toward the constraint boundary.
+                # Standard Augmented Lagrangian (ALM):
+                #   minimize  -F(w'_g) + Σ_i [ λ_i g_i + (ρ_i/2) g_i^2 ]
                 #
                 # NOTE:
                 # - We keep the same reference-point separation:
@@ -3268,15 +3262,13 @@ class AttackerClient(Client):
                 if self.use_augmented_lagrangian:
                     # Keep penalty parameters on the same device
                     rho_dist = self.rho_dist.to(target_device) if isinstance(self.rho_dist, torch.Tensor) else torch.tensor(float(self.rho_dist or 0.0), device=target_device)
-                    # Hinge-Squared penalty: only penalize when constraint is violated (g > 0)
-                    aug_term = (rho_dist / 2.0) * (F.relu(g_dist) ** 2)
+                    aug_term = (rho_dist / 2.0) * (g_dist ** 2)
 
-                    # Similarity quadratic penalties (two-sided, two ρ's) with Hinge-Squared
+                    # Similarity quadratic penalties (two-sided, two ρ's)
                     if self.use_cosine_similarity_constraint:
                         rho_sim_low = self.rho_sim_low.to(target_device) if isinstance(self.rho_sim_low, torch.Tensor) else torch.tensor(float(self.rho_sim_low or 0.0), device=target_device)
                         rho_sim_up = self.rho_sim_up.to(target_device) if isinstance(self.rho_sim_up, torch.Tensor) else torch.tensor(float(self.rho_sim_up or 0.0), device=target_device)
-                        # Hinge-Squared for both similarity constraints
-                        aug_term = aug_term + (rho_sim_low / 2.0) * (F.relu(g_sim_low) ** 2) + (rho_sim_up / 2.0) * (F.relu(g_sim_up) ** 2)
+                        aug_term = aug_term + (rho_sim_low / 2.0) * (g_sim_low ** 2) + (rho_sim_up / 2.0) * (g_sim_up ** 2)
 
                     lagrangian_objective = -global_loss + dist_lagr_term + sim_lagr_term + aug_term
                 else:
