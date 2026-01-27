@@ -111,9 +111,17 @@ class NewsClassifierModel(nn.Module):
                 model_name_lower = model_name.lower()
                 
                 # ========== Decoder-only Models (GPT-style) ==========
-                # Pythia / GPT-NeoX uses fused QKV attention
+                # Pythia / GPT-NeoX uses fused QKV attention + MLP layers
+                # Standard LoRA configuration includes:
+                # - query_key_value: Attention QKV fusion projection
+                # - dense_h_to_4h: MLP up-projection (hidden → 4×hidden)
+                # - dense_4h_to_h: MLP down-projection (4×hidden → hidden)
                 if "pythia" in model_name_lower or "gpt-neox" in model_name_lower:
-                    lora_target_modules = ["query_key_value"]
+                    lora_target_modules = [
+                        "query_key_value",      # Attention layer: QKV fusion projection
+                        "dense_h_to_4h",       # MLP layer: up-projection (hidden → 4×hidden)
+                        "dense_4h_to_h"        # MLP layer: down-projection (4×hidden → hidden)
+                    ]
                 # OPT uses separate projections
                 elif "opt-" in model_name_lower or "/opt" in model_name_lower:
                     lora_target_modules = ["q_proj", "k_proj", "v_proj", "out_proj"]
