@@ -726,7 +726,7 @@ def main():
         'graph_threshold': 0.5,  # Cosine similarity threshold for adjacency matrix: A[i,j]=1 if sim(Δ_i,Δ_j)>threshold, else 0. Higher=sparser graph
 
         # ========== Attack Configuration ==========
-        'attack_method': 'GRMP',  # Attack method: 'GRMP' (VGAE-based) or 'ALIE' (statistical baseline)
+        'attack_method': 'ALIE',  # Attack method: 'GRMP' (VGAE-based) or 'ALIE' (statistical baseline)
         'attack_start_round': 0,  # Round when attack phase starts (int, now all rounds use complete poisoning)
         
         # ========== ALIE Attack Parameters (only used when attack_method='ALIE') ==========
