@@ -393,7 +393,10 @@ class Server:
                 total_data_size += client_data_size
         
         for client in self.clients:
-            if isinstance(client, AttackerClient):
+            # Use is_attacker attribute instead of isinstance to support both GRMP and ALIE attackers
+            if getattr(client, 'is_attacker', False):
+                # Set global model params and constraint params (for GRMP attackers)
+                # ALIE attackers also implement these methods for interface compatibility
                 client.set_global_model_params(global_params)
                 # Set constraint parameters: d_T, total_data_size, and benign_data_sizes
                 # d_T: distance threshold for proximity constraint (4b)
@@ -410,7 +413,8 @@ class Server:
         print("\n🔧 Phase 1: Client Preparation")
         for client in self.clients:
             client.set_round(round_num)
-            if isinstance(client, AttackerClient):
+            # Use is_attacker attribute instead of isinstance to support both GRMP and ALIE attackers
+            if getattr(client, 'is_attacker', False):
                 client.prepare_for_round(round_num)
 
         # Phase 2: Local Training

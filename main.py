@@ -225,7 +225,8 @@ def setup_experiment(config):
             )
         else:
             # --- Attacker Client ---
-            print(f"  Client {client_id}: ATTACKER (VGAE Enabled)")
+            attack_method = config.get('attack_method', 'GRMP')
+            
             # Use actual assigned data size for claimed_data_size (for fair weighted aggregation)
             # Note: Attackers are data-agnostic (don't use data for training), but use assigned
             # data size for aggregation weight to maintain realistic attack scenario
@@ -235,13 +236,45 @@ def setup_experiment(config):
             if config_claimed is None:
                 # Use actual assigned data size (recommended for realistic scenario)
                 claimed_data_size = actual_data_size
-                print(f"    Claimed data size D'_j(t): {claimed_data_size} (matches assigned data)")
             else:
                 # Override with config value (for attack experiments)
                 claimed_data_size = config_claimed
-                print(f"    WARNING: Override: Claimed data size D'_j(t): {claimed_data_size} (actual: {actual_data_size})")
             
-            client = AttackerClient(
+            # Create attacker based on attack_method
+            if attack_method == 'ALIE':
+                # ========== ALIE Attack Client ==========
+                from attack_baseline import ALIEAttackerClient
+                print(f"  Client {client_id}: ATTACKER (ALIE Attack)")
+                print(f"    Claimed data size D'_j(t): {claimed_data_size} (matches assigned data)")
+                
+                # Get ALIE-specific parameters
+                alie_z_max = config.get('alie_z_max', None)
+                alie_attack_start_round = config.get('alie_attack_start_round', None)
+                
+                client = ALIEAttackerClient(
+                    client_id=client_id,
+                    model=global_model,
+                    data_manager=data_manager,
+                    data_indices=client_indices[client_id],
+                    lr=config['client_lr'],
+                    local_epochs=config['local_epochs'],
+                    alpha=config['alpha'],
+                    num_clients=config['num_clients'],
+                    num_attackers=config['num_attackers'],
+                    z_max=alie_z_max,
+                    attack_start_round=alie_attack_start_round,
+                    claimed_data_size=claimed_data_size,
+                    grad_clip_norm=config.get('grad_clip_norm', 1.0)
+                )
+            else:
+                # ========== GRMP Attack Client (default) ==========
+                print(f"  Client {client_id}: ATTACKER (GRMP Attack - VGAE Enabled)")
+                if config_claimed is None:
+                    print(f"    Claimed data size D'_j(t): {claimed_data_size} (matches assigned data)")
+                else:
+                    print(f"    WARNING: Override: Claimed data size D'_j(t): {claimed_data_size} (actual: {actual_data_size})")
+                
+                client = AttackerClient(
                 client_id=client_id,
                 model=global_model,
                 data_manager=data_manager,
@@ -674,8 +707,8 @@ def main():
         # Supported models:
         #   Encoder-only (BERT-style): 'distilbert-base-uncased', 'bert-base-uncased', 'roberta-base', 'microsoft/deberta-v3-base'
         #   Decoder-only (GPT-style):  'EleutherAI/pythia-160m', 'EleutherAI/pythia-1b', 'facebook/opt-125m', 'gpt2'
-        # 'model_name': 'distilbert-base-uncased',  # Hugging Face model name for classification
-        'model_name': 'EleutherAI/pythia-160m',  # Alternative: Pythia-160M (Decoder-only, 160M params)
+        'model_name': 'distilbert-base-uncased',  # Hugging Face model name for classification
+        # 'model_name': 'EleutherAI/pythia-160m',  # Alternative: Pythia-160M (Decoder-only, 160M params)
         'num_labels': 4,  # Number of classification labels (AG News: 4, IMDB: 2)
         'max_length': 128,  # Max token length for tokenizer. AG News: 128 (avg ~50 tokens), IMDB: 256-512 (avg ~230 tokens)
         
@@ -693,9 +726,14 @@ def main():
         'graph_threshold': 0.5,  # Cosine similarity threshold for adjacency matrix: A[i,j]=1 if sim(Δ_i,Δ_j)>threshold, else 0. Higher=sparser graph
 
         # ========== Attack Configuration ==========
+        'attack_method': 'GRMP',  # Attack method: 'GRMP' (VGAE-based) or 'ALIE' (statistical baseline)
         'attack_start_round': 0,  # Round when attack phase starts (int, now all rounds use complete poisoning)
+        
+        # ========== ALIE Attack Parameters (only used when attack_method='ALIE') ==========
+        'alie_z_max': None,  # Z-score multiplier for ALIE. None = auto-compute based on num_clients and num_attackers
+        'alie_attack_start_round': None,  # Round to start ALIE attack (None = start immediately, overrides attack_start_round)
 
-        # ========== Attack Optimization Parameters ==========
+        # ========== GRMP Attack Optimization Parameters ==========
         'proxy_step': 0.001,  # Step size for gradient-free ascent toward global-loss proxy
         'proxy_steps': 200,  # Number of optimization steps for attack objective (int)
         'grad_clip_norm': 1.0,  # Gradient clipping norm for training stability (float)
@@ -747,7 +785,11 @@ def main():
 
     # Run experiment (attack if num_attackers > 0, baseline if num_attackers == 0)
     if config.get('num_attackers', 0) > 0:
-        print("Running GRMP Attack with VGAE...")
+        attack_method = config.get('attack_method', 'GRMP')
+        if attack_method == 'ALIE':
+            print("Running ALIE Attack (Model Poisoning Baseline)...")
+        else:
+            print("Running GRMP Attack with VGAE...")
     else:
         print("Running Baseline Experiment (No Attack)...")
     
