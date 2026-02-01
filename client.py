@@ -2948,7 +2948,7 @@ class AttackerClient(Client):
                     initial_global_ref_gpu, _, _ = self._aggregate_update_no_beta(
                         proxy_param.detach(),
                         benign_updates_gpu=getattr(self, 'benign_updates_gpu', None),
-                        other_attacker_updates_gpu=None  # Exclude other attackers during optimization,
+                        other_attacker_updates_gpu=None,  # Exclude other attackers during optimization
                         include_current_attacker=False  # CRITICAL: Exclude current attacker to avoid circular dependency
                     )
                     initial_dist_att_to_global = torch.norm(proxy_param.detach().view(-1) - initial_global_ref_gpu.view(-1))
@@ -2960,7 +2960,7 @@ class AttackerClient(Client):
                     initial_loss = self._compute_global_loss(
                         proxy_param.detach(),
                         benign_updates_gpu=getattr(self, 'benign_updates_gpu', None),
-                        other_attacker_updates_gpu=None  # Exclude other attackers during optimization,
+                        other_attacker_updates_gpu=None,  # Exclude other attackers during optimization
                         include_current_attacker=True  # MODIFIED: Include current attacker (for display, matches optimization)
                     ).item()
                     
@@ -2974,7 +2974,7 @@ class AttackerClient(Client):
                         initial_aggregation_without_current, _, _ = self._aggregate_update_no_beta(
                             proxy_param.detach(),
                             benign_updates_gpu=getattr(self, 'benign_updates_gpu', None),
-                            other_attacker_updates_gpu=None  # Exclude other attackers during optimization,
+                            other_attacker_updates_gpu=None,  # Exclude other attackers during optimization
                             include_current_attacker=False  # CRITICAL: Exclude current attacker to avoid circular dependency
                         )
                         proxy_param_flat = proxy_param.detach().view(-1)
@@ -3100,7 +3100,7 @@ class AttackerClient(Client):
             global_loss = self._compute_global_loss(
                 proxy_param,
                 benign_updates_gpu=getattr(self, 'benign_updates_gpu', None),
-                other_attacker_updates_gpu=None  # Exclude other attackers during optimization,
+                other_attacker_updates_gpu=None,  # Exclude other attackers during optimization
                 include_current_attacker=True  # MODIFIED: Include current attacker to enable gradient-based optimization
             )
             
@@ -3126,7 +3126,7 @@ class AttackerClient(Client):
                 global_ref_gpu, _, _ = self._aggregate_update_no_beta(
                     proxy_param,
                     benign_updates_gpu=getattr(self, 'benign_updates_gpu', None),
-                    other_attacker_updates_gpu=None  # Exclude other attackers during optimization,
+                    other_attacker_updates_gpu=None,  # Exclude other attackers during optimization
                     include_current_attacker=False  # CRITICAL: Exclude current attacker to avoid circular dependency
                 )
                 dist_att_to_global = torch.norm(proxy_param.view(-1) - global_ref_gpu.view(-1))
@@ -3183,7 +3183,7 @@ class AttackerClient(Client):
                     aggregation_without_current, _, _ = self._aggregate_update_no_beta(
                         proxy_param,  # Not included in aggregation, just for API compatibility
                         benign_updates_gpu=benign_updates_for_ref,
-                        other_attacker_updates_gpu=None  # Exclude other attackers during optimization,
+                        other_attacker_updates_gpu=None,  # Exclude other attackers during optimization
                         include_current_attacker=False  # CRITICAL: Exclude current attacker to avoid circular dependency
                     )
                     proxy_param_flat = proxy_param.view(-1)
@@ -3300,7 +3300,7 @@ class AttackerClient(Client):
                     dist_att_to_agg, _ = self._compute_distance_update_space(
                         proxy_param,
                         benign_updates_gpu=getattr(self, 'benign_updates_gpu', None),
-                        other_attacker_updates_gpu=None  # Exclude other attackers during optimization,
+                        other_attacker_updates_gpu=None,  # Exclude other attackers during optimization
                         include_current_attacker=False  # CRITICAL: Exclude current attacker to avoid circular dependency
                     )
                     constraint_dist_violation = F.relu(dist_att_to_agg - dist_bound_val_hc)
@@ -3427,7 +3427,7 @@ class AttackerClient(Client):
                 global_ref_gpu_after_step, _, _ = self._aggregate_update_no_beta(
                     proxy_param,  # Updated value after proxy_opt.step()
                     benign_updates_gpu=getattr(self, 'benign_updates_gpu', None),
-                    other_attacker_updates_gpu=None  # Exclude other attackers during optimization,
+                    other_attacker_updates_gpu=None,  # Exclude other attackers during optimization
                     include_current_attacker=False  # CRITICAL: Exclude current attacker (consistent with optimization)
                 )
                 dist_att_to_global_after_step = torch.norm(proxy_param.view(-1) - global_ref_gpu_after_step.view(-1))
@@ -3448,7 +3448,7 @@ class AttackerClient(Client):
                 aggregation_without_current_after_step, _, _ = self._aggregate_update_no_beta(
                     proxy_param,  # Updated value
                     benign_updates_gpu=benign_updates_for_ref,
-                    other_attacker_updates_gpu=None  # Exclude other attackers during optimization,
+                    other_attacker_updates_gpu=None,  # Exclude other attackers during optimization
                     include_current_attacker=False  # CRITICAL: Exclude current attacker to avoid circular dependency
                 )
                 proxy_param_flat_after_step = proxy_param.view(-1)
@@ -3702,7 +3702,7 @@ class AttackerClient(Client):
             final_global_ref_gpu, _, _ = self._aggregate_update_no_beta(
                 proxy_param,
                 benign_updates_gpu=getattr(self, 'benign_updates_gpu', None),
-                other_attacker_updates_gpu=None  # Exclude other attackers during optimization,
+                other_attacker_updates_gpu=None,  # Exclude other attackers during optimization
                 include_current_attacker=False  # CRITICAL: Exclude current attacker (consistent with optimization)
             )
             final_dist_att_to_global = torch.norm(proxy_param.view(-1) - final_global_ref_gpu.view(-1))
@@ -3715,7 +3715,7 @@ class AttackerClient(Client):
             final_loss = self._compute_global_loss(
                 proxy_param,
                 benign_updates_gpu=getattr(self, 'benign_updates_gpu', None),
-                other_attacker_updates_gpu=None  # Exclude other attackers during optimization,
+                other_attacker_updates_gpu=None,  # Exclude other attackers during optimization
                 include_current_attacker=True  # MODIFIED: Include current attacker (for display, matches optimization)
             ).item()
             final_violation = max(0, final_g_dist)
@@ -3728,7 +3728,7 @@ class AttackerClient(Client):
                 final_aggregation_without_current, _, _ = self._aggregate_update_no_beta(
                     proxy_param,
                     benign_updates_gpu=getattr(self, 'benign_updates_gpu', None),
-                    other_attacker_updates_gpu=None  # Exclude other attackers during optimization,
+                    other_attacker_updates_gpu=None,  # Exclude other attackers during optimization
                     include_current_attacker=False  # CRITICAL: Exclude current attacker (consistent with optimization)
                 )
                 proxy_param_flat = proxy_param.view(-1)
