@@ -274,6 +274,9 @@ def setup_experiment(config):
                 else:
                     print(f"    WARNING: Override: Claimed data size D'_j(t): {claimed_data_size} (actual: {actual_data_size})")
                 
+                use_proxy = config.get('attacker_use_proxy_data', True)
+                if not use_proxy:
+                    print(f"    Attacker proxy data disabled (attacker_use_proxy_data=False); no dataset access.")
                 client = AttackerClient(
                 client_id=client_id,
                 model=global_model,
@@ -297,7 +300,8 @@ def setup_experiment(config):
                 vgae_kl_weight=config['vgae_kl_weight'],
                 proxy_steps=config['proxy_steps'],
                 grad_clip_norm=config['grad_clip_norm'],
-                early_stop_constraint_stability_steps=config.get('early_stop_constraint_stability_steps', 3)
+                early_stop_constraint_stability_steps=config.get('early_stop_constraint_stability_steps', 3),
+                use_proxy_data=use_proxy
             )
             
             # Set Lagrangian Dual parameters (if using)
@@ -685,7 +689,7 @@ def main():
         'batch_size': 128,  # Batch size for local training (int)
         'test_batch_size': 512,  # Batch size for test/validation data loaders (int)
         'local_epochs': 5,  # Number of local training epochs per round (int, per paper Section IV)
-        'alpha': 0.1,  # FedProx proximal coefficient μ: loss += (μ/2)*||w - w_global||². Set 0 for standard FedAvg, >0 to penalize local drift from global model (helps Non-IID stability)
+        'alpha': 0.0,  # FedProx proximal coefficient μ: loss += (μ/2)*||w - w_global||². Set 0 for standard FedAvg, >0 to penalize local drift from global model (helps Non-IID stability)
         
         # ========== Data Distribution ==========
         'data_distribution': 'non-iid',  # 'iid' for uniform random, 'non-iid' for Dirichlet-based heterogeneous distribution
@@ -773,12 +777,12 @@ def main():
         'rho_max': 1e3,
         
         # ========== Proxy Loss Estimation Parameters ==========
+        'attacker_use_proxy_data': False,  # If True, GRMP attacker uses proxy set to estimate F(w'_g); if False, no data access (constraint-only optimization)
         'proxy_sample_size': 512,  # Number of samples in proxy dataset for F(w'_g) estimation (int)
                                 # Increased from 128 to 512 for better accuracy (4 batches with test_batch_size=128)
-        'proxy_max_batches_opt': 2,  # Max batches for proxy loss in optimization loop (int)
-                                # Used during gradient-based optimization (20 steps per round)
-        'proxy_max_batches_eval': 4,  # Max batches for proxy loss in final evaluation (int)
-                                # Used for final attack objective logging (1 call per round)
+        'proxy_max_batches_opt': 2,  # Max batches per _proxy_global_loss call in optimization loop (int)
+                                # Only has effect when proxy set has >1 batch (proxy_sample_size > test_batch_size).
+        'proxy_max_batches_eval': 4,  # Max batches per _proxy_global_loss call in final evaluation (int)
         
         # ========== Visualization ==========
         'generate_plots': True,  # Whether to generate visualization plots (bool)
