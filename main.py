@@ -266,6 +266,28 @@ def setup_experiment(config):
                     claimed_data_size=claimed_data_size,
                     grad_clip_norm=config.get('grad_clip_norm', 1.0)
                 )
+            elif attack_method == 'SignFlipping':
+                # ========== Sign-Flipping Attack Client ==========
+                from attack_baseline_sign_flipping import SignFlippingAttackerClient
+                print(f"  Client {client_id}: ATTACKER (Sign-Flipping Attack)")
+                print(f"    Claimed data size D'_j(t): {claimed_data_size} (matches assigned data)")
+                
+                sign_flip_scale = config.get('sign_flip_scale', 1.0)
+                sign_flip_attack_start_round = config.get('sign_flip_attack_start_round', None)
+                
+                client = SignFlippingAttackerClient(
+                    client_id=client_id,
+                    model=global_model,
+                    data_manager=data_manager,
+                    data_indices=client_indices[client_id],
+                    lr=config['client_lr'],
+                    local_epochs=config['local_epochs'],
+                    alpha=config['alpha'],
+                    sign_flip_scale=sign_flip_scale,
+                    attack_start_round=sign_flip_attack_start_round,
+                    claimed_data_size=claimed_data_size,
+                    grad_clip_norm=config.get('grad_clip_norm', 1.0)
+                )
             else:
                 # ========== GRMP Attack Client (default) ==========
                 print(f"  Client {client_id}: ATTACKER (GRMP Attack - VGAE Enabled)")
@@ -730,12 +752,15 @@ def main():
         'graph_threshold': 0.5,  # Cosine similarity threshold for adjacency matrix: A[i,j]=1 if sim(Δ_i,Δ_j)>threshold, else 0. Higher=sparser graph
 
         # ========== Attack Configuration ==========
-        'attack_method': 'GRMP',  # Attack method: 'GRMP' (VGAE-based) or 'ALIE' (statistical baseline)
+        'attack_method': 'GRMP',  # Attack method: 'GRMP' (VGAE-based), 'ALIE' (statistical baseline), or 'SignFlipping' (sign-flip baseline)
         'attack_start_round': 0,  # Round when attack phase starts (int, now all rounds use complete poisoning)
         
         # ========== ALIE Attack Parameters (only used when attack_method='ALIE') ==========
         'alie_z_max': None,  # Z-score multiplier for ALIE. None = auto-compute based on num_clients and num_attackers
         'alie_attack_start_round': None,  # Round to start ALIE attack (None = start immediately, overrides attack_start_round)
+        # ========== Sign-Flipping Attack Parameters (only used when attack_method='SignFlipping') ==========
+        'sign_flip_scale': 1.0,  # Scale for sign-flip: malicious = -scale * mean(benign_updates). Default 1.0
+        'sign_flip_attack_start_round': None,  # Round to start Sign-Flipping attack (None = start immediately)
 
         # ========== GRMP Attack Optimization Parameters ==========
         'proxy_step': 0.001,  # Step size for gradient-free ascent toward global-loss proxy
@@ -793,6 +818,8 @@ def main():
         attack_method = config.get('attack_method', 'GRMP')
         if attack_method == 'ALIE':
             print("Running ALIE Attack (Model Poisoning Baseline)...")
+        elif attack_method == 'SignFlipping':
+            print("Running Sign-Flipping Attack (Model Poisoning Baseline)...")
         else:
             print("Running GRMP Attack with VGAE...")
     else:
