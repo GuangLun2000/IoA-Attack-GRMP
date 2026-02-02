@@ -729,6 +729,7 @@ def main():
         'lora_alpha': 16,  # LoRA alpha (scaling factor, typically 2*r) - UPDATED to match r=8
         'lora_dropout': 0.1,  # LoRA dropout rate
         'lora_target_modules': None,  # None = use default for DistilBERT (["q_lin", "k_lin", "v_lin", "out_lin"])
+        
         # Model configuration
         # Supported models:
         #   Encoder-only (BERT-style): 'distilbert-base-uncased', 'bert-base-uncased', 'roberta-base', 'microsoft/deberta-v3-base'
@@ -737,6 +738,19 @@ def main():
         # 'model_name': 'EleutherAI/pythia-160m',  # Alternative: Pythia-160M (Decoder-only, 160M params)
         'num_labels': 4,  # Number of classification labels (AG News: 4, IMDB: 2)
         'max_length': 128,  # Max token length for tokenizer. AG News: 128 (avg ~50 tokens), IMDB: 256-512 (avg ~230 tokens)
+        
+
+        # ========== Attack Configuration ==========
+        'attack_method': 'SignFlipping',  # Attack method: 'GRMP' (VGAE-based), 'ALIE' (statistical baseline), or 'SignFlipping' (sign-flip baseline)
+        'attack_start_round': 0,  # Round when attack phase starts (int, now all rounds use complete poisoning)
+        
+        # ========== ALIE Attack Parameters (only used when attack_method='ALIE') ==========
+        'alie_z_max': None,  # Z-score multiplier for ALIE. None = auto-compute based on num_clients and num_attackers
+        'alie_attack_start_round': None,  # Round to start ALIE attack (None = start immediately, overrides attack_start_round)
+        # ========== Sign-Flipping Attack Parameters (only used when attack_method='SignFlipping') ==========
+        'sign_flip_scale': 1.0,  # Scale for sign-flip: malicious = -scale * mean(benign_updates). Default 1.0
+        'sign_flip_attack_start_round': None,  # Round to start Sign-Flipping attack (None = start immediately)
+
         
         # ========== VGAE Training Parameters ==========
         # Reference paper: input_dim=5, hidden1_dim=32, hidden2_dim=16, num_epoch=10, lr=0.01
@@ -750,17 +764,6 @@ def main():
         'vgae_kl_weight': 0.1,  # KL divergence weight in VGAE loss: L = L_recon + kl_weight * KL(q||p). Higher=stronger latent regularization
         # ========== Graph Construction Parameters ==========
         'graph_threshold': 0.5,  # Cosine similarity threshold for adjacency matrix: A[i,j]=1 if sim(Δ_i,Δ_j)>threshold, else 0. Higher=sparser graph
-
-        # ========== Attack Configuration ==========
-        'attack_method': 'GRMP',  # Attack method: 'GRMP' (VGAE-based), 'ALIE' (statistical baseline), or 'SignFlipping' (sign-flip baseline)
-        'attack_start_round': 0,  # Round when attack phase starts (int, now all rounds use complete poisoning)
-        
-        # ========== ALIE Attack Parameters (only used when attack_method='ALIE') ==========
-        'alie_z_max': None,  # Z-score multiplier for ALIE. None = auto-compute based on num_clients and num_attackers
-        'alie_attack_start_round': None,  # Round to start ALIE attack (None = start immediately, overrides attack_start_round)
-        # ========== Sign-Flipping Attack Parameters (only used when attack_method='SignFlipping') ==========
-        'sign_flip_scale': 1.0,  # Scale for sign-flip: malicious = -scale * mean(benign_updates). Default 1.0
-        'sign_flip_attack_start_round': None,  # Round to start Sign-Flipping attack (None = start immediately)
 
         # ========== GRMP Attack Optimization Parameters ==========
         'proxy_step': 0.001,  # Step size for gradient-free ascent toward global-loss proxy
