@@ -178,7 +178,6 @@ class BenignClient(Client):
         # Note: α (self.alpha) corresponds to μ in FedProx paper
         mu = self.alpha
 
-        _nan_skip_logged = False  # log once per round when skipping NaN batch
         for epoch in range(epochs):
             epoch_loss = 0
             num_batches = 0
@@ -195,18 +194,8 @@ class BenignClient(Client):
                 outputs = self.model(input_ids, attention_mask)
                 # NewsClassifierModel returns logits directly
                 logits = outputs
-                # NaN/Inf guard: skip batch to avoid corrupting params (decoder-only can produce bad logits if last-token selection is wrong)
-                if torch.isnan(logits).any() or torch.isinf(logits).any():
-                    if not _nan_skip_logged:
-                        print(f"  [Client {self.client_id}] Skipping batch: NaN/Inf in logits (possible decoder last-token / pad_token_id issue)")
-                        _nan_skip_logged = True
-                    continue
+                
                 ce_loss = nn.CrossEntropyLoss()(logits, labels)
-                if torch.isnan(ce_loss) or torch.isinf(ce_loss):
-                    if not _nan_skip_logged:
-                        print(f"  [Client {self.client_id}] Skipping batch: NaN/Inf in loss (check pad_token_id and decoder forward)")
-                        _nan_skip_logged = True
-                    continue
                 
                 # Add proximal regularization term (FedProx standard formula: (μ/2) * ||w - w_t||²)
                 # Standard FedProx: min_w F_k(w) + (μ/2) * ||w - w_t||²
@@ -234,13 +223,6 @@ class BenignClient(Client):
         
         # Calculate update (will be on CPU)
         update = self.get_model_update(initial_params)
-        
-        # NaN/Inf guard: decoder-only (e.g. Pythia) can explode with default LR; fallback to zero update
-        if torch.isnan(update).any() or torch.isinf(update).any():
-            self.model.set_flat_params(initial_params)
-            update = self.get_model_update(initial_params)  # zeros after restore
-            print(f"  [Client {self.client_id}] WARNING: NaN/Inf in update after local training; using zero update. "
-                  "For Pythia/decoder-only, try lower client_lr (e.g. 2e-5 or 1e-5).")
         
         # Move model back to CPU to free GPU memory
         self.model.cpu()
