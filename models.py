@@ -91,10 +91,13 @@ class NewsClassifierModel(nn.Module):
         )
         
         # For decoder-only models (GPT-style), set pad_token_id if not set
+        # GPTNeoXConfig and some others do not define pad_token_id; use getattr to avoid AttributeError
         if self.architecture == 'decoder':
-            if self.model.config.pad_token_id is None:
+            pad_token_id = getattr(self.model.config, 'pad_token_id', None)
+            if pad_token_id is None:
                 # Use eos_token_id as pad_token_id (common practice for GPT-style models)
-                self.model.config.pad_token_id = self.model.config.eos_token_id
+                eos_id = getattr(self.model.config, 'eos_token_id', None)
+                self.model.config.pad_token_id = eos_id
         
         # Verify that the correct model is loaded
         model_type = type(self.model).__name__
