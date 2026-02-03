@@ -711,11 +711,11 @@ def main():
         'num_rounds': 50,  # Total number of federated learning rounds (int)
         
         # ========== Training Hyperparameters ==========
-        'client_lr': 5e-6,  # Learning rate for local client training (float)
+        'client_lr': 5e-5,  # Learning rate for local client training (float)
         'server_lr': 1.0,  # Server learning rate for model aggregation (fixed at 1.0)
-        'batch_size': 64,  # Batch size for local training (int)
-        'test_batch_size': 128,  # Batch size for test/validation data loaders (int)
-        'local_epochs': 2,  # Number of local training epochs per round (int, per paper Section IV)
+        'batch_size': 128,  # Batch size for local training (int)
+        'test_batch_size': 512,  # Batch size for test/validation data loaders (int)
+        'local_epochs': 5,  # Number of local training epochs per round (int, per paper Section IV)
         'alpha': 0.0,  # FedProx proximal coefficient μ: loss += (μ/2)*||w - w_global||². Set 0 for standard FedAvg, >0 to penalize local drift from global model (helps Non-IID stability)
         
         # ========== Data Distribution ==========
@@ -739,8 +739,8 @@ def main():
         # Supported models:
         #   Encoder-only (BERT-style): 'distilbert-base-uncased', 'bert-base-uncased', 'roberta-base', 'microsoft/deberta-v3-base'
         #   Decoder-only (GPT-style):  'EleutherAI/pythia-160m', 'EleutherAI/pythia-1b', 'facebook/opt-125m', 'gpt2'
-        # 'model_name': 'distilbert-base-uncased',  # Hugging Face model name for classification
-        'model_name': 'EleutherAI/pythia-160m',  # Alternative: Pythia-160M (Decoder-only, 160M params)
+        'model_name': 'distilbert-base-uncased',  # Hugging Face model name for classification
+        # 'model_name': 'EleutherAI/pythia-160m',  # Alternative: Pythia-160M (Decoder-only, 160M params)
         'num_labels': 4,  # Number of classification labels (AG News: 4, IMDB: 2)
         'max_length': 128,  # Max token length for tokenizer. AG News: 128 (avg ~50 tokens), IMDB: 256-512 (avg ~230 tokens)
         
@@ -753,7 +753,7 @@ def main():
         'alie_z_max': None,  # NeurIPS '19: z-score multiplier for ALIE. None = auto-compute based on num_clients and num_attackers
         'alie_attack_start_round': None,  # Round to start ALIE attack (None = start immediately, overrides attack_start_round)
         # ========== Sign-Flipping Attack Parameters (only used when attack_method='SignFlipping') ==========
-        'sign_flip_scale': 2.0,  # ICML '18: malicious = -scale * g_own (own update). Paper uses 10.
+        'sign_flip_scale': 10.0,  # ICML '18: malicious = -scale * g_own (own update). Paper uses 10.
         'sign_flip_attack_start_round': None,  # Round to start Sign-Flipping attack (None = start immediately)
 
 
@@ -782,7 +782,7 @@ def main():
         'sim_center': None,  # Optional center for similarity bounds (None = use benign min/max)
 
         # ========== Lagrangian Dual Parameters ==========
-        'use_lagrangian_dual': False,  # Whether to use Lagrangian Dual mechanism (bool, True/False)
+        'use_lagrangian_dual': True,  # Whether to use Lagrangian Dual mechanism (bool, True/False)
         # Distance constraint multiplier parameters
         'lambda_dist_init': 0.1,  # Initial λ_dist(t) value for distance constraint: dist(Δ_att, Δ_g) ≤ dist_bound
         'lambda_dist_lr': 0.01,    # Learning rate for λ_dist(t) update (dual ascent step size)
@@ -796,7 +796,7 @@ def main():
 
         # ========== Augmented Lagrangian Method (ALM) Parameters ==========
         # Standard ALM adds quadratic penalties: (ρ/2) * g(x)^2 for each inequality constraint g(x) ≤ 0.
-        'use_augmented_lagrangian': False,   # Enable Augmented Lagrangian (requires use_lagrangian_dual=True)
+        'use_augmented_lagrangian': True,   # Enable Augmented Lagrangian (requires use_lagrangian_dual=True)
         'lambda_update_mode': 'classic',    # Dual variable update: "classic"=λ += lr*g (fixed step), "alm"=λ += ρ*g (penalty-scaled step, standard ALM)
         # Penalty parameters ρ (per-constraint): controls quadratic penalty strength (ρ/2)*max(0,g)^2 in ALM objective
         'rho_dist_init': 1.0,
@@ -810,7 +810,7 @@ def main():
         'rho_max': 1e3,
         
         # ========== Proxy Loss Estimation Parameters ==========
-        'attacker_use_proxy_data': False,  # If True, GRMP attacker uses proxy set to estimate F(w'_g); if False, no data access (constraint-only optimization)
+        'attacker_use_proxy_data': True,  # If True, GRMP attacker uses proxy set to estimate F(w'_g); if False, no data access (constraint-only optimization)
         'proxy_sample_size': 512,  # Number of samples in proxy dataset for F(w'_g) estimation (int)
                                 # Increased from 128 to 512 for better accuracy (4 batches with test_batch_size=128)
         'proxy_max_batches_opt': 1,  # Max batches per _proxy_global_loss call in optimization loop (int)
