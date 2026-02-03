@@ -711,7 +711,7 @@ def main():
         'num_rounds': 50,  # Total number of federated learning rounds (int)
         
         # ========== Training Hyperparameters ==========
-        'client_lr': 5e-5,  # Learning rate for local client training (float)
+        'client_lr': 1e-5,  # Learning rate for local client training (float)
         'server_lr': 1.0,  # Server learning rate for model aggregation (fixed at 1.0)
         'batch_size': 64,  # Batch size for local training (int)
         'test_batch_size': 128,  # Batch size for test/validation data loaders (int)
@@ -753,7 +753,7 @@ def main():
         'alie_z_max': None,  # NeurIPS '19: z-score multiplier for ALIE. None = auto-compute based on num_clients and num_attackers
         'alie_attack_start_round': None,  # Round to start ALIE attack (None = start immediately, overrides attack_start_round)
         # ========== Sign-Flipping Attack Parameters (only used when attack_method='SignFlipping') ==========
-        'sign_flip_scale': 10.0,  # ICML '18: malicious = -scale * g_own (own update). Paper uses 10.
+        'sign_flip_scale': 2.0,  # ICML '18: malicious = -scale * g_own (own update). Paper uses 10.
         'sign_flip_attack_start_round': None,  # Round to start Sign-Flipping attack (None = start immediately)
 
 
