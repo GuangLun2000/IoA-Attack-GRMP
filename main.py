@@ -715,7 +715,7 @@ def main():
         'server_lr': 1.0,  # Server learning rate for model aggregation (fixed at 1.0)
         'batch_size': 128,  # Batch size for local training (int)
         'test_batch_size': 512,  # Batch size for test/validation data loaders (int)
-        'local_epochs': 5,  # Number of local training epochs per round (int, per paper Section IV)
+        'local_epochs': 1,  # Number of local training epochs per round (int, per paper Section IV)
         'alpha': 0.0,  # FedProx proximal coefficient μ: loss += (μ/2)*||w - w_global||². Set 0 for standard FedAvg, >0 to penalize local drift from global model (helps Non-IID stability)
         
         # ========== Data Distribution ==========
@@ -746,7 +746,7 @@ def main():
         
 
         # ========== Attack Configuration ==========
-        'attack_method': 'SignFlipping',  # Attack method: 'GRMP' (VGAE-based), 'ALIE' (statistical baseline), or 'SignFlipping' (sign-flip baseline)
+        'attack_method': 'GRMP',  # Attack method: 'GRMP' (VGAE-based), 'ALIE' (statistical baseline), or 'SignFlipping' (sign-flip baseline)
         'attack_start_round': 0,  # Round when attack phase starts (int, now all rounds use complete poisoning)
         
         # ========== ALIE Attack Parameters (only used when attack_method='ALIE') ==========
