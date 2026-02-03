@@ -782,7 +782,7 @@ def main():
         'sim_center': None,  # Optional center for similarity bounds (None = use benign min/max)
 
         # ========== Lagrangian Dual Parameters ==========
-        'use_lagrangian_dual': True,  # Whether to use Lagrangian Dual mechanism (bool, True/False)
+        'use_lagrangian_dual': False,  # Whether to use Lagrangian Dual mechanism (bool, True/False)
         # Distance constraint multiplier parameters
         'lambda_dist_init': 0.1,  # Initial λ_dist(t) value for distance constraint: dist(Δ_att, Δ_g) ≤ dist_bound
         'lambda_dist_lr': 0.01,    # Learning rate for λ_dist(t) update (dual ascent step size)
@@ -796,7 +796,7 @@ def main():
 
         # ========== Augmented Lagrangian Method (ALM) Parameters ==========
         # Standard ALM adds quadratic penalties: (ρ/2) * g(x)^2 for each inequality constraint g(x) ≤ 0.
-        'use_augmented_lagrangian': True,   # Enable Augmented Lagrangian (requires use_lagrangian_dual=True)
+        'use_augmented_lagrangian': False,   # Enable Augmented Lagrangian (requires use_lagrangian_dual=True)
         'lambda_update_mode': 'classic',    # Dual variable update: "classic"=λ += lr*g (fixed step), "alm"=λ += ρ*g (penalty-scaled step, standard ALM)
         # Penalty parameters ρ (per-constraint): controls quadratic penalty strength (ρ/2)*max(0,g)^2 in ALM objective
         'rho_dist_init': 1.0,
@@ -810,7 +810,7 @@ def main():
         'rho_max': 1e3,
         
         # ========== Proxy Loss Estimation Parameters ==========
-        'attacker_use_proxy_data': True,  # If True, GRMP attacker uses proxy set to estimate F(w'_g); if False, no data access (constraint-only optimization)
+        'attacker_use_proxy_data': False,  # If True, GRMP attacker uses proxy set to estimate F(w'_g); if False, no data access (constraint-only optimization)
         'proxy_sample_size': 512,  # Number of samples in proxy dataset for F(w'_g) estimation (int)
                                 # Increased from 128 to 512 for better accuracy (4 batches with test_batch_size=128)
         'proxy_max_batches_opt': 1,  # Max batches per _proxy_global_loss call in optimization loop (int)
