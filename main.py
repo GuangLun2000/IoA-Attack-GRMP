@@ -345,6 +345,7 @@ def setup_experiment(config):
                 vgae_kl_weight=config['vgae_kl_weight'],
                 proxy_steps=config['proxy_steps'],
                 grad_clip_norm=config['grad_clip_norm'],
+                proxy_grad_clip_norm=config.get('attacker_proxy_grad_clip_norm', 1.0),
                 early_stop_constraint_stability_steps=config.get('early_stop_constraint_stability_steps', 3),
                 use_proxy_data=use_proxy
             )
@@ -734,6 +735,7 @@ def main():
         'batch_size': 64,  # Batch size for local training (int)
         'test_batch_size': 128,  # Batch size for test/validation data loaders (int)
         'local_epochs': 5,  # Number of local training epochs per round (int, per paper Section IV)
+        'grad_clip_norm': 1.0,  # Benign client local training (classification model). For Pythia-160m try 0.5 if nan
         'alpha': 0.0,  # FedProx proximal coefficient μ: loss += (μ/2)*||w - w_global||². Set 0 for standard FedAvg, >0 to penalize local drift from global model (helps Non-IID stability)
         
         # ========== Data Distribution ==========
@@ -796,7 +798,7 @@ def main():
         # ========== GRMP Attack Optimization Parameters ==========
         'proxy_step': 0.001,  # Step size for gradient-free ascent toward global-loss proxy
         'proxy_steps': 200,  # Number of optimization steps for attack objective (int)
-        'grad_clip_norm': 1.0,  # Gradient clipping norm for training stability (float)
+        'attacker_proxy_grad_clip_norm': 1.0,  # GRMP attacker proxy parameter update only; separate from benign training
         'attacker_claimed_data_size': None,  # None = use actual assigned data size
         'early_stop_constraint_stability_steps': 1,  # Early stopping: stop after N consecutive steps satisfying constraint (int)
 

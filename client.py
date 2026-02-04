@@ -209,6 +209,16 @@ class BenignClient(Client):
                 
                 loss = ce_loss + proximal_term
                 
+                if not torch.isfinite(loss).item():
+                    # Skip batch on nan/inf to avoid corrupting model (e.g. Pythia-160m can be unstable)
+                    import warnings
+                    warnings.warn(
+                        f"[Client {self.client_id}] Skipping batch: loss={loss.item()} (non-finite). "
+                        "Consider lowering client_lr or grad_clip_norm for decoder models (e.g. Pythia-160m)."
+                    )
+                    pbar.set_postfix({'loss': 'nan(skip)'})
+                    continue
+                
                 self.optimizer.zero_grad()
                 loss.backward()
                 
@@ -257,6 +267,7 @@ class AttackerClient(Client):
                  vgae_kl_weight=0.1,
                  proxy_steps=20,
                  grad_clip_norm=1.0,
+                 proxy_grad_clip_norm=None,
                  early_stop_constraint_stability_steps=3,
                  use_proxy_data=True):
         """
@@ -285,7 +296,8 @@ class AttackerClient(Client):
             vgae_dropout: VGAE dropout rate (default: 0.0)
             vgae_kl_weight: Weight for KL divergence term in VGAE loss (default: 0.1)
             proxy_steps: Number of optimization steps for attack objective (default: 20)
-            grad_clip_norm: Gradient clipping norm for training stability (default: 1.0)
+            grad_clip_norm: Kept for compatibility; proxy step uses proxy_grad_clip_norm if set.
+            proxy_grad_clip_norm: Gradient clipping for GRMP proxy parameter update only (default: None = use grad_clip_norm). Separate from benign client training.
             use_proxy_data: If True, use proxy set to estimate F(w'_g); if False, no data access (constraint-only optimization) (default: True)
         
         Note: lr, local_epochs, and alpha must be explicitly provided to ensure consistency
@@ -310,6 +322,7 @@ class AttackerClient(Client):
         self.vgae_kl_weight = vgae_kl_weight
         self.proxy_steps = proxy_steps
         self.grad_clip_norm = grad_clip_norm
+        self.proxy_grad_clip_norm = proxy_grad_clip_norm if proxy_grad_clip_norm is not None else grad_clip_norm
         self.early_stop_constraint_stability_steps = early_stop_constraint_stability_steps
         self.use_proxy_data = use_proxy_data
 
@@ -3413,8 +3426,8 @@ class AttackerClient(Client):
                         ) from e
             # ===========================================================
             
-            # Gradient clipping to prevent explosion
-            torch.nn.utils.clip_grad_norm_([proxy_param], max_norm=self.grad_clip_norm)
+            # Gradient clipping for proxy parameter update (separate from benign client training)
+            torch.nn.utils.clip_grad_norm_([proxy_param], max_norm=self.proxy_grad_clip_norm)
             
             proxy_opt.step()
             

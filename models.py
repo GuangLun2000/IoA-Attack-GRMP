@@ -185,34 +185,33 @@ class NewsClassifierModel(nn.Module):
         Note: Different model architectures use different classifier head names:
         - BERT-style (Encoder): 'classifier'
         - GPT-style (Decoder): 'score' (e.g., GPT2ForSequenceClassification, GPTNeoXForSequenceClassification)
+        
+        Decoder-only (GPT-NeoX/Pythia) uses smaller init to avoid large initial logits and loss=nan.
         """
         with torch.no_grad():
-            # Determine the classifier head name based on architecture
-            # GPT-style models use 'score', BERT-style use 'classifier'
             classifier_names = ['classifier', 'score']
+            # Decoder (Pythia/GPT-NeoX) is more sensitive: small init avoids gradient explosion / nan
+            use_small_init = self.architecture == 'decoder'
             
-            # In LoRA mode, model structure may be different (PEFT wrapper)
-            # Try to access classifier from base_model if using PEFT
+            def _init_head(clf):
+                if hasattr(clf, 'weight'):
+                    if use_small_init:
+                        nn.init.normal_(clf.weight, mean=0.0, std=0.02)
+                    else:
+                        nn.init.xavier_uniform_(clf.weight)
+                if hasattr(clf, 'bias') and clf.bias is not None:
+                    nn.init.zeros_(clf.bias)
+            
             if self.use_lora and hasattr(self.model, 'base_model'):
-                # PEFT model: access through base_model
                 base_model = self.model.base_model.model
                 for cls_name in classifier_names:
                     if hasattr(base_model, cls_name):
-                        classifier = getattr(base_model, cls_name)
-                        if hasattr(classifier, 'weight'):
-                            nn.init.xavier_uniform_(classifier.weight)
-                        if hasattr(classifier, 'bias') and classifier.bias is not None:
-                            nn.init.zeros_(classifier.bias)
+                        _init_head(getattr(base_model, cls_name))
                         break
             else:
-                # Standard model: direct access
                 for cls_name in classifier_names:
                     if hasattr(self.model, cls_name):
-                        classifier = getattr(self.model, cls_name)
-                        if hasattr(classifier, 'weight'):
-                            nn.init.xavier_uniform_(classifier.weight)
-                        if hasattr(classifier, 'bias') and classifier.bias is not None:
-                            nn.init.zeros_(classifier.bias)
+                        _init_head(getattr(self.model, cls_name))
                         break
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
