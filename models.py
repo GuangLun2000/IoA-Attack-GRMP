@@ -52,20 +52,6 @@ except ImportError:
     print("  Warning: peft library not available. LoRA support disabled. Install with: pip install peft")
 
 
-def _ensure_decoder_config_pad_token(config) -> None:
-    """
-    Ensure config has pad_token_id set for decoder-only models (GPT-NeoX/Pythia, OPT, GPT-2, etc.).
-    Some configs (e.g. older GPTNeoXConfig or certain checkpoints) do not define pad_token_id at all;
-    use getattr/setattr to avoid AttributeError and set pad_token_id = eos_token_id when missing.
-    """
-    pad_id = getattr(config, 'pad_token_id', None)
-    if pad_id is not None:
-        return
-    eos_id = getattr(config, 'eos_token_id', None)
-    if eos_id is not None:
-        setattr(config, 'pad_token_id', eos_id)
-
-
 class NewsClassifierModel(nn.Module):
     """
     Transformer-based model for news classification.
@@ -104,9 +90,11 @@ class NewsClassifierModel(nn.Module):
             num_labels=num_labels
         )
         
-        # For decoder-only models (GPT-NeoX/Pythia, OPT, GPT-2), ensure config.pad_token_id is set
+        # For decoder-only models (GPT-style), set pad_token_id if not set
         if self.architecture == 'decoder':
-            _ensure_decoder_config_pad_token(self.model.config)
+            if self.model.config.pad_token_id is None:
+                # Use eos_token_id as pad_token_id (common practice for GPT-style models)
+                self.model.config.pad_token_id = self.model.config.eos_token_id
         
         # Verify that the correct model is loaded
         model_type = type(self.model).__name__
