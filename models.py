@@ -155,13 +155,6 @@ class NewsClassifierModel(nn.Module):
                     # Fallback: keep None and let PEFT raise a clearer error if unsupported
                     lora_target_modules = None
             
-            # For decoder-only (e.g. Pythia), the classification head "score" is
-            # randomly initialized and must be trained; otherwise it stays frozen
-            # and can cause large logits -> overflow -> NaN loss. Add to modules_to_save.
-            modules_to_save = None
-            if self.architecture == 'decoder':
-                modules_to_save = ["score"]
-            
             # Configure LoRA
             peft_config = LoraConfig(
                 task_type=TaskType.SEQ_CLS,
@@ -169,7 +162,6 @@ class NewsClassifierModel(nn.Module):
                 lora_alpha=lora_alpha,
                 lora_dropout=lora_dropout,
                 target_modules=lora_target_modules,
-                modules_to_save=modules_to_save,
                 bias="none",  # Don't add bias parameters
             )
             
@@ -208,10 +200,7 @@ class NewsClassifierModel(nn.Module):
                     if hasattr(base_model, cls_name):
                         classifier = getattr(base_model, cls_name)
                         if hasattr(classifier, 'weight'):
-                            if self.architecture == 'decoder':
-                                nn.init.normal_(classifier.weight, 0, 0.02)
-                            else:
-                                nn.init.xavier_uniform_(classifier.weight)
+                            nn.init.xavier_uniform_(classifier.weight)
                         if hasattr(classifier, 'bias') and classifier.bias is not None:
                             nn.init.zeros_(classifier.bias)
                         break
@@ -221,10 +210,7 @@ class NewsClassifierModel(nn.Module):
                     if hasattr(self.model, cls_name):
                         classifier = getattr(self.model, cls_name)
                         if hasattr(classifier, 'weight'):
-                            if self.architecture == 'decoder':
-                                nn.init.normal_(classifier.weight, 0, 0.02)
-                            else:
-                                nn.init.xavier_uniform_(classifier.weight)
+                            nn.init.xavier_uniform_(classifier.weight)
                         if hasattr(classifier, 'bias') and classifier.bias is not None:
                             nn.init.zeros_(classifier.bias)
                         break
