@@ -922,19 +922,21 @@ class AttackerClient(Client):
                 offset += numel
         
         # Step 2: Build base parameters dict (frozen parameters, detached)
+        # CRITICAL: Cast to float32 to avoid Half != float mismatch in functional_call
+        # (e.g. PEFT modules_to_save or buffers can be float16; LoRA params are float32)
         self.base_params = {}
         for name, param in self.model.named_parameters():
             if not param.requires_grad:
-                # Frozen base parameter - detach and move to target device
+                # Frozen base parameter - detach, move to target device, ensure float32
                 with torch.no_grad():
-                    base_param = param.data.clone().detach().to(target_device)
+                    base_param = param.data.clone().detach().to(device=target_device, dtype=torch.float32)
                 self.base_params[name] = base_param
         
-        # Step 3: Build buffers dict (detached)
+        # Step 3: Build buffers dict (detached), same dtype consistency
         self.base_buffers = {}
         for name, buffer in self.model.named_buffers():
             with torch.no_grad():
-                base_buffer = buffer.data.clone().detach().to(target_device)
+                base_buffer = buffer.data.clone().detach().to(device=target_device, dtype=torch.float32)
             self.base_buffers[name] = base_buffer
         
         # Step 4: Consistency assertions (CRITICAL)
@@ -1166,14 +1168,16 @@ class AttackerClient(Client):
                     full_params = dict(self.base_params)  # Shallow copy of base params (detached)
                     full_params.update(lora_params)  # Add LoRA params (with gradients)
                     
-                    # Step 4: Ensure base_buffers are on correct device
-                    # Buffers are constants (e.g., batch norm running means), no gradients needed
+                    # Step 4: Ensure base_buffers are on correct device and dtype (float32)
+                    # Half vs float in matmul causes "c10::Half != float" in functional_call
                     full_buffers = {}
                     for name, buf in self.base_buffers.items():
-                        if not self._device_matches(buf.device, target_device):
-                            full_buffers[name] = buf.to(target_device)
-                        else:
-                            full_buffers[name] = buf
+                        b = buf
+                        if not self._device_matches(b.device, target_device):
+                            b = b.to(target_device)
+                        if b.dtype != torch.float32:
+                            b = b.to(dtype=torch.float32)
+                        full_buffers[name] = b
                     
                     # Step 5: Use functional_call for forward pass (preserves gradients)
                     # CRITICAL: This is the ONLY valid path - no fallback allowed
