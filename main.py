@@ -757,11 +757,11 @@ def main():
         
         # Model configuration
         # Supported models:
-        #   Encoder-only (BERT-style): 'distilbert-base-uncased', 'bert-base-uncased', 'roberta-base', 'microsoft/deberta-v3-base'
-        #   Decoder-only (GPT-style):  'gpt2' (recommended baseline), 'EleutherAI/pythia-160m', 'EleutherAI/pythia-1b', 'facebook/opt-125m'
-        # 'model_name': 'distilbert-base-uncased',  # Hugging Face model name for classification
-        # Decoder-only alternatives (stable baseline LLMs, similar scale to Pythia-160M):
-        'model_name': 'gpt2',                      # GPT-2 124M — most stable decoder baseline (OpenAI, widely used)
+        # Encoder-only (BERT-style): 'distilbert-base-uncased', 'bert-base-uncased', 'roberta-base', 'microsoft/deberta-v3-base'
+        'model_name': 'distilbert-base-uncased',  # distilbert 67M
+
+        # Decoder-only (GPT-style):  'gpt2' (recommended baseline), 'EleutherAI/pythia-160m', 'EleutherAI/pythia-1b', 'facebook/opt-125m'
+        # 'model_name': 'gpt2',                      # GPT-2 124M — most stable decoder baseline (OpenAI, widely used)
         # 'model_name': 'EleutherAI/pythia-160m',    # Pythia-160M (GPT-NeoX arch, 160M params)
         # 'model_name': 'facebook/opt-125m',         # OPT-125M (Meta, 125M params)
         'num_labels': 4,  # Number of classification labels (AG News: 4, IMDB: 2)
@@ -780,7 +780,6 @@ def main():
         'sign_flip_attack_start_round': None,  # Round to start Sign-Flipping attack (None = start immediately)
         # ========== Gaussian Attack Parameters (only used when attack_method='Gaussian') ==========
         'gaussian_attack_start_round': None,  # Round to start Gaussian attack (None = start immediately)
-
 
         # ========== VGAE Training Parameters ==========
         # Reference paper: input_dim=5, hidden1_dim=32, hidden2_dim=16, num_epoch=10, lr=0.01
