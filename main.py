@@ -729,7 +729,7 @@ def main():
         'num_rounds': 50,  # Total number of federated learning rounds (int)
         
         # ========== Training Hyperparameters ==========
-        'client_lr': 5e-5,  # Learning rate for local client training (float)
+        'client_lr': 1e-5,  # Learning rate for local client training (float)
         'server_lr': 1.0,  # Server learning rate for model aggregation (fixed at 1.0)
         'batch_size': 128,  # Batch size for local training (int)
         'test_batch_size': 256,  # Batch size for test/validation data loaders (int)
