@@ -723,7 +723,7 @@ def main():
         
         # ========== Federated Learning Setup ==========
         'num_clients': 7,  # Total number of federated learning clients (int)
-        'num_attackers': 2,  # Number of attacker clients (int, must be < num_clients)
+        'num_attackers': 0,  # Number of attacker clients (int, must be < num_clients)
         'num_benign_clients': None,  # Optional: Explicit number of benign clients for baseline experiment
                                     # If None, baseline will use (num_clients - num_attackers) to ensure fair comparison
                                     # If set, baseline experiment will use exactly this many benign clients
@@ -758,10 +758,10 @@ def main():
         # Model configuration
         # Supported models:
         # Encoder-only (BERT-style): 'distilbert-base-uncased', 'bert-base-uncased', 'roberta-base', 'microsoft/deberta-v3-base'
-        'model_name': 'distilbert-base-uncased',  # distilbert 67M
+        # 'model_name': 'distilbert-base-uncased',  # distilbert 67M
 
         # Decoder-only (GPT-style):  'gpt2' (recommended baseline), 'EleutherAI/pythia-160m', 'EleutherAI/pythia-1b', 'facebook/opt-125m'
-        # 'model_name': 'gpt2',                      # GPT-2 124M — most stable decoder baseline (OpenAI, widely used)
+        'model_name': 'gpt2',                      # GPT-2 124M — most stable decoder baseline (OpenAI, widely used)
         # 'model_name': 'EleutherAI/pythia-160m',    # Pythia-160M (GPT-NeoX arch, 160M params)
         # 'model_name': 'facebook/opt-125m',         # OPT-125M (Meta, 125M params)
         'num_labels': 4,  # Number of classification labels (AG News: 4, IMDB: 2)
@@ -834,7 +834,7 @@ def main():
         'rho_max': 1e3,
         
         # ========== Proxy Loss Estimation Parameters ==========
-        'attacker_use_proxy_data': False,  # If True, GRMP attacker uses proxy set to estimate F(w'_g); if False, no data access (constraint-only optimization)
+        'attacker_use_proxy_data': True,  # If True, GRMP attacker uses proxy set to estimate F(w'_g); if False, no data access (constraint-only optimization)
         'proxy_sample_size': 256,  # Number of samples in proxy dataset for F(w'_g) estimation (int)
                                 # Increased from 128 to 512 for better accuracy (4 batches with test_batch_size=128)
         'proxy_max_batches_opt': 1,  # Max batches per _proxy_global_loss call in optimization loop (int)
