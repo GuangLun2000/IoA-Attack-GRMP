@@ -1,9 +1,6 @@
 # Core dependencies for GRMP attack simulation with GPU support
-# Version upper bounds: only use releases that existed before 2026-01-30 (no "current latest").
-# - PyTorch 2.10.0 was 2026-01-21; 2.11+ would be after cutoff.
-# - Transformers 5.0.0 was 2026-01-26; 5.1+ would be after cutoff. 4.35+ needs models._ensure_decoder_config_pad_token() for Pythia.
-torch>=2.0.0,<2.11.0
-transformers>=4.30.0,<5.1.0
+torch>=2.0.0
+transformers>=4.35.0,<5.0.0
 numpy>=1.21.0
 pandas>=1.3.0
 scipy>=1.7.0  # Required for ALIE attack (scipy.stats.norm)
