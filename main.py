@@ -343,12 +343,10 @@ def setup_experiment(config):
                 vgae_latent_dim=config['vgae_latent_dim'],
                 vgae_dropout=config['vgae_dropout'],
                 vgae_kl_weight=config['vgae_kl_weight'],
-                vgae_maximize_loss=config.get('vgae_maximize_loss', False),
                 proxy_steps=config['proxy_steps'],
                 grad_clip_norm=config['grad_clip_norm'],
                 proxy_grad_clip_norm=config.get('attacker_proxy_grad_clip_norm', 1.0),
                 early_stop_constraint_stability_steps=config.get('early_stop_constraint_stability_steps', 3),
-                attack_vgae_only=config.get('attack_vgae_only', False),
                 use_proxy_data=use_proxy
             )
             
@@ -760,10 +758,10 @@ def main():
         # Model configuration
         # Supported models:
         # Encoder-only (BERT-style): 'distilbert-base-uncased', 'bert-base-uncased', 'roberta-base', 'microsoft/deberta-v3-base'
-        'model_name': 'distilbert-base-uncased',  # distilbert 67M
+        # 'model_name': 'distilbert-base-uncased',  # distilbert 67M
 
         # Decoder-only (GPT-style):  'gpt2' (recommended baseline), 'EleutherAI/pythia-160m', 'EleutherAI/pythia-1b', 'facebook/opt-125m'
-        # 'model_name': 'gpt2',                      # GPT-2 124M — most stable decoder baseline (OpenAI, widely used)
+        'model_name': 'gpt2',                      # GPT-2 124M — most stable decoder baseline (OpenAI, widely used)
         # 'model_name': 'EleutherAI/pythia-160m',    # Pythia-160M (GPT-NeoX arch, 160M params)
         # 'model_name': 'facebook/opt-125m',         # OPT-125M (Meta, 125M params)
         'num_labels': 4,  # Number of classification labels (AG News: 4, IMDB: 2)
@@ -793,8 +791,6 @@ def main():
         'vgae_latent_dim': 32,  # VGAE latent space dimension (per paper: hidden2_dim=16)
         'vgae_dropout': 0,  # VGAE encoder dropout rate (0=no dropout, higher=more regularization to prevent overfitting)
         'vgae_kl_weight': 0.1,  # KL divergence weight in VGAE loss: L = L_recon + kl_weight * KL(q||p). Higher=stronger latent regularization
-        'vgae_maximize_loss': True,   # True: attacker maximizes VGAE loss (η_loss) per paper; False: minimize (standard autoencoder)
-        'attack_vgae_only': True,     # True: paper-aligned mode, malicious update = VGAE+GSP only, skip proxy_param gradient optimization
         # ========== Graph Construction Parameters ==========
         'graph_threshold': 0.5,  # Cosine similarity threshold for adjacency matrix: A[i,j]=1 if sim(Δ_i,Δ_j)>threshold, else 0. Higher=sparser graph
 
@@ -809,11 +805,11 @@ def main():
         'dist_bound': None,  # Distance threshold for constraint (4b): d(w'_j(t), w'_g(t)) ≤ dist_bound (None = use benign max distance)
         'sim_center': None,  # Optional center for similarity bounds (None = use benign min/max)
 
-        # ========== Lagrangian Dual Parameters (Paper Eq.6–10: standard Lagrangian, λ only, no ρ) ==========
+        # ========== Lagrangian Dual Parameters ==========
         'use_lagrangian_dual': True,  # Whether to use Lagrangian Dual mechanism (bool, True/False)
-        # Distance constraint multiplier parameters (Eq.10: λ(t+1)=[λ(t)−ε(d−d_T)]^+)
+        # Distance constraint multiplier parameters
         'lambda_dist_init': 0.1,  # Initial λ_dist(t) value for distance constraint: dist(Δ_att, Δ_g) ≤ dist_bound
-        'lambda_dist_lr': 0.01,    # ε in Eq.10: step size for λ update
+        'lambda_dist_lr': 0.01,    # Learning rate for λ_dist(t) update (dual ascent step size)
         
         # ========== Cosine Similarity Constraint Parameters (TWO-SIDED with TWO multipliers) False by default ==========
         'use_cosine_similarity_constraint': False,  # Whether to enable cosine similarity constraints (bool, True/False) False by default!
@@ -824,7 +820,7 @@ def main():
 
         # ========== Augmented Lagrangian Method (ALM) Parameters ==========
         # Standard ALM adds quadratic penalties: (ρ/2) * g(x)^2 for each inequality constraint g(x) ≤ 0.
-        'use_augmented_lagrangian': False,  # Paper uses standard Lagrangian only (no (ρ/2)g²). False = paper-aligned; True = ALM extension
+        'use_augmented_lagrangian': True,   # Enable Augmented Lagrangian (requires use_lagrangian_dual=True)
         'lambda_update_mode': 'classic',    # Dual variable update: "classic"=λ += lr*g (fixed step), "alm"=λ += ρ*g (penalty-scaled step, standard ALM)
         # Penalty parameters ρ (per-constraint): controls quadratic penalty strength (ρ/2)*max(0,g)^2 in ALM objective
         'rho_dist_init': 1.0,
@@ -838,7 +834,7 @@ def main():
         'rho_max': 1e3,
         
         # ========== Proxy Loss Estimation Parameters ==========
-        'attacker_use_proxy_data': False,  # Paper: data-untethered, no task data. False = paper-aligned; True = use proxy set for F(w'_g)
+        'attacker_use_proxy_data': True,  # If True, GRMP attacker uses proxy set to estimate F(w'_g); if False, no data access (constraint-only optimization)
         'proxy_sample_size': 512,  # Number of samples in proxy dataset for F(w'_g) estimation (int)
                                 # Increased from 128 to 512 for better accuracy (4 batches with test_batch_size=128)
         'proxy_max_batches_opt': 1,  # Max batches per _proxy_global_loss call in optimization loop (int)
