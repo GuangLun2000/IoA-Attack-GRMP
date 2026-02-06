@@ -343,10 +343,12 @@ def setup_experiment(config):
                 vgae_latent_dim=config['vgae_latent_dim'],
                 vgae_dropout=config['vgae_dropout'],
                 vgae_kl_weight=config['vgae_kl_weight'],
+                vgae_maximize_loss=config.get('vgae_maximize_loss', False),
                 proxy_steps=config['proxy_steps'],
                 grad_clip_norm=config['grad_clip_norm'],
                 proxy_grad_clip_norm=config.get('attacker_proxy_grad_clip_norm', 1.0),
                 early_stop_constraint_stability_steps=config.get('early_stop_constraint_stability_steps', 3),
+                attack_vgae_only=config.get('attack_vgae_only', False),
                 use_proxy_data=use_proxy
             )
             
@@ -791,6 +793,8 @@ def main():
         'vgae_latent_dim': 32,  # VGAE latent space dimension (per paper: hidden2_dim=16)
         'vgae_dropout': 0,  # VGAE encoder dropout rate (0=no dropout, higher=more regularization to prevent overfitting)
         'vgae_kl_weight': 0.1,  # KL divergence weight in VGAE loss: L = L_recon + kl_weight * KL(q||p). Higher=stronger latent regularization
+        'vgae_maximize_loss': True,   # True: attacker maximizes VGAE loss (η_loss) per paper; False: minimize (standard autoencoder)
+        'attack_vgae_only': True,     # True: paper-aligned mode, malicious update = VGAE+GSP only, skip proxy_param gradient optimization
         # ========== Graph Construction Parameters ==========
         'graph_threshold': 0.5,  # Cosine similarity threshold for adjacency matrix: A[i,j]=1 if sim(Δ_i,Δ_j)>threshold, else 0. Higher=sparser graph
 
@@ -820,7 +824,7 @@ def main():
 
         # ========== Augmented Lagrangian Method (ALM) Parameters ==========
         # Standard ALM adds quadratic penalties: (ρ/2) * g(x)^2 for each inequality constraint g(x) ≤ 0.
-        'use_augmented_lagrangian': True,   # Enable Augmented Lagrangian (requires use_lagrangian_dual=True)
+        'use_augmented_lagrangian': False,  # Paper uses standard Lagrangian only (no (ρ/2)g²). False = paper-aligned; True = ALM extension
         'lambda_update_mode': 'classic',    # Dual variable update: "classic"=λ += lr*g (fixed step), "alm"=λ += ρ*g (penalty-scaled step, standard ALM)
         # Penalty parameters ρ (per-constraint): controls quadratic penalty strength (ρ/2)*max(0,g)^2 in ALM objective
         'rho_dist_init': 1.0,
@@ -834,7 +838,7 @@ def main():
         'rho_max': 1e3,
         
         # ========== Proxy Loss Estimation Parameters ==========
-        'attacker_use_proxy_data': True,  # If True, GRMP attacker uses proxy set to estimate F(w'_g); if False, no data access (constraint-only optimization)
+        'attacker_use_proxy_data': False,  # Paper: data-untethered, no task data. False = paper-aligned; True = use proxy set for F(w'_g)
         'proxy_sample_size': 512,  # Number of samples in proxy dataset for F(w'_g) estimation (int)
                                 # Increased from 128 to 512 for better accuracy (4 batches with test_batch_size=128)
         'proxy_max_batches_opt': 1,  # Max batches per _proxy_global_loss call in optimization loop (int)
