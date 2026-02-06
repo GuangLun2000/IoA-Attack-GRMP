@@ -473,32 +473,43 @@ class AttackerClient(Client):
         # Note: d_T is used only as fallback when distance prediction is disabled or no history
 
         # Modification 1: Reset Lagrangian multipliers at the start of each round
-        # Reason: Prevent λ from accumulating across rounds, which causes numerical instability and optimization imbalance
-        
-        # Reset distance constraint multiplier
-        if self.use_lagrangian_dual and self.lambda_dist_init is not None:
-            self.lambda_dist = torch.tensor(self.lambda_dist_init, requires_grad=False)
-        
-        # Reset cosine similarity constraint multipliers (TWO multipliers for two-sided constraint)
-        if self.use_cosine_similarity_constraint and self.lambda_sim_low_init is not None:
-            self.lambda_sim_low = torch.tensor(self.lambda_sim_low_init, requires_grad=False)
-        if self.use_cosine_similarity_constraint and self.lambda_sim_up_init is not None:
-            self.lambda_sim_up = torch.tensor(self.lambda_sim_up_init, requires_grad=False)
+        # Paper-aligned mode (attack_vgae_only): persist λ across rounds (Algorithm 1, Eq.10); only λ, no ρ (standard Lagrangian Eq.6).
+        # Non-paper mode: reset to avoid instability.
+        if getattr(self, 'attack_vgae_only', False):
+            # First round: initialize only λ_dist (paper Eq.6–10 use only λ; no β' => no ρ).
+            # Later rounds: keep previous round's λ(t+1) as λ(t).
+            if self.use_lagrangian_dual and self.lambda_dist_init is not None and self.lambda_dist is None:
+                self.lambda_dist = torch.tensor(self.lambda_dist_init, requires_grad=False)
+            if self.use_cosine_similarity_constraint and self.lambda_sim_low_init is not None and getattr(self, 'lambda_sim_low', None) is None:
+                self.lambda_sim_low = torch.tensor(self.lambda_sim_low_init, requires_grad=False)
+            if self.use_cosine_similarity_constraint and self.lambda_sim_up_init is not None and getattr(self, 'lambda_sim_up', None) is None:
+                self.lambda_sim_up = torch.tensor(self.lambda_sim_up_init, requires_grad=False)
+            # Paper: no ρ (standard Lagrangian only); do not init or use ρ in paper mode.
+        else:
+            # Reset distance constraint multiplier
+            if self.use_lagrangian_dual and self.lambda_dist_init is not None:
+                self.lambda_dist = torch.tensor(self.lambda_dist_init, requires_grad=False)
 
-        # Reset Augmented Lagrangian penalty parameters (ρ) at the start of each round
-        if self.use_lagrangian_dual and self.use_augmented_lagrangian:
-            if self.rho_dist_init is not None:
-                self.rho_dist = torch.tensor(self.rho_dist_init, requires_grad=False)
-            if self.use_cosine_similarity_constraint:
-                if self.rho_sim_low_init is not None:
-                    self.rho_sim_low = torch.tensor(self.rho_sim_low_init, requires_grad=False)
-                if self.rho_sim_up_init is not None:
-                    self.rho_sim_up = torch.tensor(self.rho_sim_up_init, requires_grad=False)
+            # Reset cosine similarity constraint multipliers (TWO multipliers for two-sided constraint)
+            if self.use_cosine_similarity_constraint and self.lambda_sim_low_init is not None:
+                self.lambda_sim_low = torch.tensor(self.lambda_sim_low_init, requires_grad=False)
+            if self.use_cosine_similarity_constraint and self.lambda_sim_up_init is not None:
+                self.lambda_sim_up = torch.tensor(self.lambda_sim_up_init, requires_grad=False)
 
-            # Reset per-round violation history (avoid cross-round coupling)
-            self._prev_violation_dist = None
-            self._prev_violation_sim_low = None
-            self._prev_violation_sim_up = None
+            # Reset Augmented Lagrangian penalty parameters (ρ) at the start of each round
+            if self.use_lagrangian_dual and self.use_augmented_lagrangian:
+                if self.rho_dist_init is not None:
+                    self.rho_dist = torch.tensor(self.rho_dist_init, requires_grad=False)
+                if self.use_cosine_similarity_constraint:
+                    if self.rho_sim_low_init is not None:
+                        self.rho_sim_low = torch.tensor(self.rho_sim_low_init, requires_grad=False)
+                    if self.rho_sim_up_init is not None:
+                        self.rho_sim_up = torch.tensor(self.rho_sim_up_init, requires_grad=False)
+
+                # Reset per-round violation history (avoid cross-round coupling)
+                self._prev_violation_dist = None
+                self._prev_violation_sim_low = None
+                self._prev_violation_sim_up = None
 
     def receive_benign_updates(self, updates: List[torch.Tensor], client_ids: Optional[List[int]] = None):
         """
@@ -1512,6 +1523,19 @@ class AttackerClient(Client):
             # Our loss_function returns L = L_recon + kl_weight * KL, so maximizing η_loss corresponds
             # to maximizing L (i.e., minimizing -L) under our sign convention.
             objective = -loss if getattr(self, 'vgae_maximize_loss', False) else loss
+            # Paper Eq.9: ω^a* = arg max { F(ω^g) − λ(t)·d(ω^a, ω^g) }. Here F = η_loss (VGAE loss).
+            # d(ω^a, ω^g) is not differentiable through GSP; we use surrogate = BCE(Â, A) as proxy.
+            # Objective: max η_loss − λ·surrogate => backward on (-loss - λ*surrogate).
+            if (
+                getattr(self, 'vgae_maximize_loss', False)
+                and self.use_lagrangian_dual
+                and self.lambda_dist is not None
+            ):
+                surrogate = F.binary_cross_entropy_with_logits(
+                    adj_recon.clamp(-10.0, 10.0), adj_matrix, reduction='mean'
+                )
+                lam = self.lambda_dist.item() if isinstance(self.lambda_dist, torch.Tensor) else float(self.lambda_dist)
+                objective = objective - lam * surrogate
             objective.backward()
             self.vgae_optimizer.step()
         
@@ -1526,6 +1550,7 @@ class AttackerClient(Client):
                               g_sim_up: 'Optional[torch.Tensor]' = None) -> dict:
         """
         Update dual variables (λ, and optionally ρ) using the same logic as the optimization loop.
+        Paper Eq.10: λ(t+1) = [λ(t) − ε(d(ω^a*, ω^g) − d_T)]^+ (standard Lagrangian, no ρ in paper mode).
 
         This supports two call sites:
         - Optimization loop (per-step) using proxy_param (primal) values
@@ -1537,17 +1562,18 @@ class AttackerClient(Client):
         if dist_bound_val is None:
             return info
 
-        # Distance dual update
+        # Distance dual update (Paper Eq.10 / Section C (24a)): λ(t+1) = [λ(t) − ε(d − d_T)]^+
         dist_att_val = float(dist_att_to_global.item())
         lambda_dist_val = float(self.lambda_dist.item() if isinstance(self.lambda_dist, torch.Tensor) else self.lambda_dist)
-        g_dist_val = dist_att_val - float(dist_bound_val)
+        g_dist_val = dist_att_val - float(dist_bound_val)  # d - d_T
         info.update({"dist_att": dist_att_val, "g_dist": g_dist_val, "lambda_dist_before": lambda_dist_val})
 
         if self.use_augmented_lagrangian and self.lambda_update_mode == "alm":
             rho_dist_val = float(self.rho_dist.item() if isinstance(self.rho_dist, torch.Tensor) else (self.rho_dist or 0.0))
             new_lambda_dist = lambda_dist_val + rho_dist_val * g_dist_val
         else:
-            new_lambda_dist = lambda_dist_val + float(self.lambda_dist_lr) * g_dist_val
+            # Subgradient descent for dual: λ_new = λ − ε·(d − d_T), then [·]^+
+            new_lambda_dist = lambda_dist_val - float(self.lambda_dist_lr) * g_dist_val
         new_lambda_dist = max(0.0, float(new_lambda_dist))
         self.lambda_dist = torch.tensor(new_lambda_dist, device=target_device, requires_grad=False)
         info["lambda_dist_after"] = new_lambda_dist
@@ -2686,10 +2712,10 @@ class AttackerClient(Client):
         Attackers are not assigned local data and do not perform local training.
         The attack is generated purely from benign updates using VGAE+GSP.
         
-        Paper Algorithm 1:
-        1. Calculate A according to cosine similarity (eq. 8)
-        2. Train VGAE to maximize L_loss (eq. 12), obtain optimal Â
-        3. Use GSP module to obtain F̂, determine w'_j(t) based on F̂
+        Paper Algorithm 1 (Lagrangian Eq.6–10, standard Lagrangian only λ, no ρ):
+        1. Construct A from cosine similarity; train VGAE with objective max η_loss − λ(t)·d (Eq.9; d≈surrogate).
+        2. GSP: Â → F̂, select w'_j(t); compute d(w'_j, w'_G), update λ(t+1)=[λ(t)−ε(d−d_T)]^+ (Eq.10).
+        3. Next round: λ(t+1) as λ(t) (persist); no β' ⇒ no ρ.
         
         Args:
             poisoned_update: Zero update (attackers don't train, so this is always zero)
@@ -2877,6 +2903,7 @@ class AttackerClient(Client):
                 sim_bound_up = torch.clamp(mean_s + 1.0 * std_s, min=-1.0, max=1.0)
                 g_sim_low_t = sim_bound_low - sim_att
                 g_sim_up_t = sim_att - sim_bound_up
+            # Paper Eq.10: one-shot dual update λ(t+1)=[λ(t)−ε(d−d_T)]^+ (paper config: distance only, no similarity/ρ).
             dual_info = self._update_dual_variables(
                 target_device=target_device,
                 dist_att_to_global=dist_att_to_global,

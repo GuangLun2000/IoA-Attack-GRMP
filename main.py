@@ -809,11 +809,11 @@ def main():
         'dist_bound': None,  # Distance threshold for constraint (4b): d(w'_j(t), w'_g(t)) ≤ dist_bound (None = use benign max distance)
         'sim_center': None,  # Optional center for similarity bounds (None = use benign min/max)
 
-        # ========== Lagrangian Dual Parameters ==========
+        # ========== Lagrangian Dual Parameters (Paper Eq.6–10: standard Lagrangian, λ only, no ρ) ==========
         'use_lagrangian_dual': True,  # Whether to use Lagrangian Dual mechanism (bool, True/False)
-        # Distance constraint multiplier parameters
+        # Distance constraint multiplier parameters (Eq.10: λ(t+1)=[λ(t)−ε(d−d_T)]^+)
         'lambda_dist_init': 0.1,  # Initial λ_dist(t) value for distance constraint: dist(Δ_att, Δ_g) ≤ dist_bound
-        'lambda_dist_lr': 0.01,    # Learning rate for λ_dist(t) update (dual ascent step size)
+        'lambda_dist_lr': 0.01,    # ε in Eq.10: step size for λ update
         
         # ========== Cosine Similarity Constraint Parameters (TWO-SIDED with TWO multipliers) False by default ==========
         'use_cosine_similarity_constraint': False,  # Whether to enable cosine similarity constraints (bool, True/False) False by default!
