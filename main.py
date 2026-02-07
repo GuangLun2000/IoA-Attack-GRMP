@@ -762,11 +762,11 @@ def main():
         # Model configuration
         # Supported models:
         # Encoder-only (BERT-style): 'distilbert-base-uncased', 'bert-base-uncased', 'roberta-base', 'microsoft/deberta-v3-base'
-        # 'model_name': 'distilbert-base-uncased',  # distilbert 67M
+        'model_name': 'distilbert-base-uncased',  # distilbert 67M
 
         # Decoder-only (GPT-style):  'gpt2' (recommended baseline), 'EleutherAI/pythia-160m', 'EleutherAI/pythia-1b', 'facebook/opt-125m'
         # 'model_name': 'gpt2',                      # GPT-2 124M — most stable decoder baseline (OpenAI, widely used)
-        'model_name': 'EleutherAI/pythia-160m',    # Pythia-160M (GPT-NeoX arch, 160M params)
+        # 'model_name': 'EleutherAI/pythia-160m',    # Pythia-160M (GPT-NeoX arch, 160M params)
         # 'model_name': 'facebook/opt-125m',         # OPT-125M (Meta, 125M params)
         'num_labels': 4,  # Number of classification labels (AG News: 4, IMDB: 2)
         'max_length': 128,  # Max token length for tokenizer. AG News: 128 (avg ~50 tokens), IMDB: 256-512 (avg ~230 tokens)
@@ -784,7 +784,7 @@ def main():
         'sign_flip_attack_start_round': None,  # Round to start Sign-Flipping attack (None = start immediately)
         # ========== Gaussian Attack Parameters (only used when attack_method='Gaussian') ==========
         'gaussian_attack_start_round': None,  # USENIX Security '20: Round to start Gaussian attack (None = start immediately)
-        'gaussian_std_scale': 1.0,  # Scale factor for noise std: attack_vec ~ N(mean, (scale*std)²). scale>1 expands noise to increase impact (FedAvg). 1.0=original Fang et al.
+        'gaussian_std_scale': 5.0,  # Scale factor for noise std: attack_vec ~ N(mean, (scale*std)²). scale>1 expands noise to increase impact (FedAvg). 1.0=original Fang et al.
 
         # ========== VGAE Training Parameters ==========
         # Reference paper: input_dim=5, hidden1_dim=32, hidden2_dim=16, num_epoch=10, lr=0.01
