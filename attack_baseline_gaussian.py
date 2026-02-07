@@ -45,7 +45,8 @@ class GaussianAttackerClient(Client):
                  data_indices, lr, local_epochs, alpha,
                  attack_start_round: Optional[int] = None,
                  claimed_data_size: float = 1.0,
-                 grad_clip_norm: float = 1.0):
+                 grad_clip_norm: float = 1.0,
+                 gaussian_std_scale: float = 1.0):
         """
         Initialize Gaussian attacker client.
 
@@ -60,6 +61,9 @@ class GaussianAttackerClient(Client):
             attack_start_round: Round to start attack (None = start immediately)
             claimed_data_size: Data size to claim for weighted aggregation
             grad_clip_norm: Gradient clipping norm (not used, interface compatibility)
+            gaussian_std_scale: Scale factor for noise std. attack_vec ~ N(mean, (scale*std)²).
+                               scale=1.0: original Fang et al. definition.
+                               scale>1.0: expands noise range to increase attack impact (FedAvg).
         """
         super().__init__(
             client_id=client_id,
@@ -75,6 +79,7 @@ class GaussianAttackerClient(Client):
         self.attack_start_round = attack_start_round
         self.claimed_data_size = claimed_data_size
         self.grad_clip_norm = grad_clip_norm
+        self.gaussian_std_scale = max(0.0, float(gaussian_std_scale))
 
         self.benign_updates: List[torch.Tensor] = []
         self.benign_update_client_ids: List[int] = []
@@ -149,8 +154,11 @@ class GaussianAttackerClient(Client):
         std = np.std(benign_np, axis=0, ddof=0)
         std = np.where(std == 0, 1e-8, std)  # Numerical stability
 
-        # Sample from N(mean, std²) per parameter (Fang et al. definition)
-        attack_vec = np.random.normal(mean, std)
+        # Sample from N(mean, (scale*std)²) per parameter.
+        # scale=1.0: original Fang et al. definition.
+        # scale>1.0: expands noise range to increase attack impact (FedAvg).
+        effective_std = std * self.gaussian_std_scale
+        attack_vec = np.random.normal(mean, effective_std)
 
         malicious_update = torch.from_numpy(attack_vec).float()
 
@@ -162,12 +170,14 @@ class GaussianAttackerClient(Client):
 
         mean_norm = float(np.linalg.norm(mean))
         std_norm = float(np.linalg.norm(std))
+        effective_std_norm = float(np.linalg.norm(effective_std))
         attack_norm = float(np.linalg.norm(attack_vec))
         lora_info = "LoRA" if self.use_lora else "Full"
+        scale_info = f", std_scale={self.gaussian_std_scale}" if self.gaussian_std_scale != 1.0 else ""
         print(
             f"    [Gaussian Attacker {self.client_id}] Generated attack ({lora_info}): "
-            f"mean_norm={mean_norm:.4f}, std_norm={std_norm:.4f}, "
-            f"attack_norm={attack_norm:.4f}, num_benign={len(self.benign_updates)}"
+            f"mean_norm={mean_norm:.4f}, effective_std_norm={effective_std_norm:.4f}, "
+            f"attack_norm={attack_norm:.4f}, num_benign={len(self.benign_updates)}{scale_info}"
         )
 
         return malicious_update

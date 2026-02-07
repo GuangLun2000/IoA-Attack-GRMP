@@ -299,6 +299,9 @@ def setup_experiment(config):
                 print(f"  Client {client_id}: ATTACKER (Gaussian Attack, USENIX Security '20)")
                 print(f"    Claimed data size D'_j(t): {claimed_data_size} (matches assigned data)")
                 gaussian_attack_start_round = config.get('gaussian_attack_start_round', None)
+                gaussian_std_scale = config.get('gaussian_std_scale', 1.0)
+                if gaussian_std_scale != 1.0:
+                    print(f"    Gaussian std_scale: {gaussian_std_scale} (noise range expanded for FedAvg)")
                 client = GaussianAttackerClient(
                     client_id=client_id,
                     model=global_model,
@@ -309,7 +312,8 @@ def setup_experiment(config):
                     alpha=config['alpha'],
                     attack_start_round=gaussian_attack_start_round,
                     claimed_data_size=claimed_data_size,
-                    grad_clip_norm=config.get('grad_clip_norm', 1.0)
+                    grad_clip_norm=config.get('grad_clip_norm', 1.0),
+                    gaussian_std_scale=gaussian_std_scale
                 )
             else:
                 # ========== GRMP Attack Client (default) ==========
@@ -779,7 +783,8 @@ def main():
         'sign_flip_scale': 10.0,  # ICML '18: malicious = -scale * g_own (own update). Paper uses 10.
         'sign_flip_attack_start_round': None,  # Round to start Sign-Flipping attack (None = start immediately)
         # ========== Gaussian Attack Parameters (only used when attack_method='Gaussian') ==========
-        'gaussian_attack_start_round': None,  # Round to start Gaussian attack (None = start immediately)
+        'gaussian_attack_start_round': None,  # USENIX Security '20: Round to start Gaussian attack (None = start immediately)
+        'gaussian_std_scale': 1.0,  # Scale factor for noise std: attack_vec ~ N(mean, (scale*std)²). scale>1 expands noise to increase impact (FedAvg). 1.0=original Fang et al.
 
         # ========== VGAE Training Parameters ==========
         # Reference paper: input_dim=5, hidden1_dim=32, hidden2_dim=16, num_epoch=10, lr=0.01
