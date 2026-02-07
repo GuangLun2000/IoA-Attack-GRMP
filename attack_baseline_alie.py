@@ -1,4 +1,4 @@
-# attack_baseline.py
+# attack_baseline_alie.py
 # ALIE (A Little Is Enough) Attack Implementation - NeurIPS '19
 # 
 # This module implements the ALIE attack as a Model Poisoning baseline.

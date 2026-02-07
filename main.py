@@ -243,7 +243,7 @@ def setup_experiment(config):
             # Create attacker based on attack_method
             if attack_method == 'ALIE':
                 # ========== ALIE Attack Client ==========
-                from attack_baseline import ALIEAttackerClient
+                from attack_baseline_alie import ALIEAttackerClient
                 print(f"  Client {client_id}: ATTACKER (ALIE Attack)")
                 print(f"    Claimed data size D'_j(t): {claimed_data_size} (matches assigned data)")
                 
