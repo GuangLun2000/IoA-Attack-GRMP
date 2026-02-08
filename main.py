@@ -737,7 +737,7 @@ def main():
         'client_lr': 5e-5,  # Learning rate for local client training (float)
         'server_lr': 1.0,  # Server learning rate for model aggregation (fixed at 1.0)
         'batch_size': 128,  # Batch size for local training (int)
-        'test_batch_size': 512,  # Batch size for test/validation data loaders (int)
+        'test_batch_size': 256,  # Batch size for test/validation data loaders (int)
         'local_epochs': 5,  # Number of local training epochs per round (int, per paper Section IV)
         'grad_clip_norm': 1.0,  # Benign client local training (classification model). For Pythia-160m try 0.5 if nan
         'alpha': 0.0,  # FedProx proximal coefficient μ: loss += (μ/2)*||w - w_global||². Set 0 for standard FedAvg, >0 to penalize local drift from global model (helps Non-IID stability)
