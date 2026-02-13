@@ -14,7 +14,8 @@ class Server:
     """Server class for federated learning with model aggregation"""
     def __init__(self, global_model: nn.Module, test_loader,
                 total_rounds=20, server_lr=0.8,
-                dist_bound=0.5):
+                dist_bound=0.5,
+                similarity_mode='local_vs_global'):
         self.global_model = copy.deepcopy(global_model)
         self.test_loader = test_loader
         self.total_rounds = total_rounds
@@ -31,6 +32,10 @@ class Server:
 
         # Server parameters
         self.server_lr = server_lr  # Server learning rate
+        # Similarity mode: 'local_vs_global' | 'pairwise' | 'both'
+        self.similarity_mode = str(similarity_mode).lower() if similarity_mode else 'local_vs_global'
+        if self.similarity_mode not in ('local_vs_global', 'pairwise', 'both'):
+            self.similarity_mode = 'local_vs_global'
         
         # Formula 4 constraint parameters (passed to attackers)
         self.dist_bound = dist_bound  # Distance threshold for constraint (4b)
@@ -205,6 +210,45 @@ class Server:
         
         return distances
 
+    def _compute_similarities_pairwise(self, updates: List[torch.Tensor], client_ids: List[int] = None) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Compute pairwise cosine similarities between all client updates (no self, no global).
+        S[i,j] = cosine_similarity(Δ_i, Δ_j). Per-client metric: mean similarity to other clients (exclude self).
+        
+        Returns:
+            similarity_matrix: (N, N) numpy array
+            similarities_derived: (N,) per-client mean similarity to others (same order as client_ids)
+        """
+        n = len(updates)
+        print("  📊 Computing cosine similarities (pairwise: local vs local, no self)")
+        if n == 0:
+            return np.array([]).reshape(0, 0), np.array([])
+        updates_stack = torch.stack(updates)  # (N, D)
+        normalized = F.normalize(updates_stack.float(), p=2, dim=1)  # (N, D)
+        similarity_matrix = (normalized @ normalized.T).cpu().numpy()  # (N, N), diagonal = 1
+        # Per-client: mean over j != i (exclude self)
+        similarities_derived = np.zeros(n)
+        if n == 1:
+            similarities_derived[0] = 1.0
+        else:
+            for i in range(n):
+                others = np.concatenate([similarity_matrix[i, :i], similarity_matrix[i, i+1:]])
+                similarities_derived[i] = float(np.mean(others))
+        print(f"  📈 Cosine Similarity (pairwise mean) - Mean: {similarities_derived.mean():.3f}, Std Dev: {similarities_derived.std():.3f}")
+        attacker_ids = {client.client_id for client in self.clients if getattr(client, 'is_attacker', False)}
+        for i, sim in enumerate(similarities_derived):
+            if hasattr(self, '_sorted_client_ids') and i < len(self._sorted_client_ids):
+                client_id = self._sorted_client_ids[i]
+                client = next((c for c in self.clients if c.client_id == client_id), None)
+                if client:
+                    client_type = "Attacker" if getattr(client, 'is_attacker', False) else "Benign"
+                    print(f"    Client {client_id} ({client_type}): {sim:.3f}")
+                else:
+                    print(f"    Client {client_id}: {sim:.3f}")
+            else:
+                print(f"    Update {i}: {sim:.3f}")
+        return similarity_matrix, similarities_derived
+
     def aggregate_updates(self, updates: List[torch.Tensor],
                           client_ids: List[int]) -> Dict:
         # Store client_ids for similarity display
@@ -240,20 +284,34 @@ class Server:
         print(f"  📐 Aggregated update norm: {aggregated_update_norm:.6f}")
         
         # Compute similarity and distance metrics for visualization
-        # Pass client_ids to ensure weighted aggregation matches attack optimization
-        similarities = self._compute_similarities(updates, client_ids)
+        mode = getattr(self, 'similarity_mode', 'local_vs_global')
+        if mode == 'local_vs_global':
+            similarities = self._compute_similarities(updates, client_ids)
+            similarity_matrix = None
+            similarities_vs_global = None
+        elif mode == 'pairwise':
+            similarity_matrix, similarities = self._compute_similarities_pairwise(updates, client_ids)
+            similarities_vs_global = None
+        else:  # 'both'
+            similarities_vs_global = self._compute_similarities(updates, client_ids)
+            similarity_matrix, similarities = self._compute_similarities_pairwise(updates, client_ids)
         euclidean_distances = self._compute_euclidean_distances(updates, client_ids) if len(updates) > 0 else np.array([])
         
         aggregation_log = {
             'similarities': similarities.tolist(),
             'euclidean_distances': euclidean_distances.tolist() if len(euclidean_distances) > 0 else [],
             'accepted_clients': client_ids.copy(),
-            'mean_similarity': similarities.mean().item() if len(similarities) > 0 else 1.0,
-            'std_similarity': similarities.std().item() if len(similarities) > 0 else 0.0,
+            'mean_similarity': float(similarities.mean()) if len(similarities) > 0 else 1.0,
+            'std_similarity': float(similarities.std()) if len(similarities) > 0 else 0.0,
             'mean_euclidean_distance': euclidean_distances.mean().item() if len(euclidean_distances) > 0 else 0.0,
             'std_euclidean_distance': euclidean_distances.std().item() if len(euclidean_distances) > 0 else 0.0,
             'aggregated_update_norm': aggregated_update_norm
         }
+        if similarity_matrix is not None:
+            aggregation_log['similarity_matrix'] = similarity_matrix.tolist()
+        if similarities_vs_global is not None:
+            aggregation_log['similarities_vs_global'] = similarities_vs_global.tolist()
+        aggregation_log['similarity_mode'] = mode
 
         return aggregation_log
 

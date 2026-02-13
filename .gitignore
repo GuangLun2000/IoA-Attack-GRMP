@@ -18,3 +18,4 @@ backup_note_md/FIXES_SUMMARY.md
 EVALUATION_METRICS_ANALYSIS.md
 /__pycache__
 /results
+/docs

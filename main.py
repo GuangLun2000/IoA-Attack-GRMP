@@ -188,7 +188,8 @@ def setup_experiment(config):
         test_loader=test_loader,
         total_rounds=config['num_rounds'],
         server_lr=config['server_lr'],
-        dist_bound=config.get('dist_bound', config.get('d_T', 0.5))  # Renamed from d_T
+        dist_bound=config.get('dist_bound', config.get('d_T', 0.5)),  # Renamed from d_T
+        similarity_mode=config.get('server_similarity_mode', 'local_vs_global')
     )
     # Set sim_center from config (cosine similarity center, optional)
     server.sim_center = config.get('sim_center', config.get('sim_T', None))
@@ -853,6 +854,8 @@ def main():
         # ========== Formula 4 Constraint Parameters ==========
         'dist_bound': None,  # Distance threshold for constraint (4b): d(w'_j(t), w'_g(t)) ≤ dist_bound (None = use benign max distance)
         'sim_center': None,  # Optional center for similarity bounds (None = use benign min/max)
+        # Server cosine similarity mode: 'local_vs_global' (each client vs Δ_g) | 'pairwise' (local vs local, report mean to others) | 'both'
+        'server_similarity_mode': 'pairwise',  # Use pairwise to avoid self-comparison; set to 'local_vs_global' to match attack constraint definition
 
         # ========== Lagrangian Dual Parameters ==========
         'use_lagrangian_dual': True,  # Whether to use Lagrangian Dual mechanism (bool, True/False)
