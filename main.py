@@ -362,6 +362,7 @@ def setup_experiment(config):
                     lambda_dist_init=config.get('lambda_dist_init', config.get('lambda_init', 0.1)),
                     lambda_dist_lr=config.get('lambda_dist_lr', config.get('lambda_lr', 0.01)),
                     use_cosine_similarity_constraint=config.get('use_cosine_similarity_constraint', False),
+                    use_pairwise_similarity_in_constraint=config.get('use_pairwise_similarity_in_constraint', False),
                     lambda_sim_low_init=config.get('lambda_sim_low_init', config.get('lambda_sim_init', 0.1)),
                     lambda_sim_up_init=config.get('lambda_sim_up_init', config.get('lambda_sim_init', 0.1)),
                     lambda_sim_low_lr=config.get('lambda_sim_low_lr', config.get('lambda_sim_lr', 0.01)),
@@ -864,7 +865,8 @@ def main():
         'lambda_dist_lr': 0.01,    # Learning rate for λ_dist(t) update (dual ascent step size)
         
         # ========== Cosine Similarity Constraint Parameters (TWO-SIDED with TWO multipliers) False by default ==========
-        'use_cosine_similarity_constraint': False,  # Whether to enable cosine similarity constraints (bool, True/False) False by default!
+        'use_cosine_similarity_constraint': False,  # Whether to enable cosine similarity constraints (bool, True/False) False by default! open both to use pairwise sim
+        'use_pairwise_similarity_in_constraint': False,  # When True and similarity constraint on: use pairwise sim (align with server_similarity_mode='pairwise') open both to use pairwise sim
         'lambda_sim_low_init': 0.1,  # Initial λ_sim_low(t) value for lower bound constraint: sim_bound_low <= sim_att
         'lambda_sim_up_init': 0.1,   # Initial λ_sim_up(t) value for upper bound constraint: sim_att <= sim_bound_up
         'lambda_sim_low_lr': 0.1,    # Learning rate for λ_sim_low(t) update
