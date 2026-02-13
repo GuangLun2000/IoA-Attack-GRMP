@@ -110,7 +110,8 @@ class SignFlippingAttackerClient(BenignClient):
         pass
 
     def set_constraint_params(self, dist_bound: Optional[float] = None,
-                              sim_center: Optional[float] = None,
+                              sim_bound_low: Optional[float] = None,
+                              sim_bound_up: Optional[float] = None,
                               total_data_size: Optional[float] = None,
                               benign_data_sizes: Optional[dict] = None):
         """Interface compatibility; not used."""

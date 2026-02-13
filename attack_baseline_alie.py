@@ -266,23 +266,11 @@ class ALIEAttackerClient(Client):
         pass
     
     def set_constraint_params(self, dist_bound: Optional[float] = None,
-                              sim_center: Optional[float] = None,
+                              sim_bound_low: Optional[float] = None,
+                              sim_bound_up: Optional[float] = None,
                               total_data_size: Optional[float] = None,
                               benign_data_sizes: Optional[dict] = None):
-        """
-        Set constraint parameters (for interface compatibility).
-        
-        ALIE attack does not use constraints, but we implement this method
-        for interface compatibility with the server.
-        
-        Args:
-            dist_bound: Distance bound (not used)
-            sim_center: Similarity center (not used)
-            total_data_size: Total data size (not used)
-            benign_data_sizes: Benign data sizes (not used)
-        """
-        # ALIE does not use constraints
-        # This method is kept for interface compatibility only
+        """Set constraint parameters (for interface compatibility). ALIE does not use constraints."""
         pass
     
     def set_lagrangian_params(self, **kwargs):

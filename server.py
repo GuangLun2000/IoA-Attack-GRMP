@@ -39,7 +39,8 @@ class Server:
         
         # Formula 4 constraint parameters (passed to attackers)
         self.dist_bound = dist_bound  # Distance threshold for constraint (4b)
-        self.sim_center = None  # Cosine similarity center (optional, will be set from config if provided)
+        self.sim_bound_low = None  # Manual lower bound for cosine similarity (None = use benign min)
+        self.sim_bound_up = None   # Manual upper bound for cosine similarity (None = use benign max)
 
         # Track historical data
         self.history = {
@@ -462,7 +463,8 @@ class Server:
                 # benign_data_sizes: {client_id: D_i(t)} for Formula (2) and (3)
                 client.set_constraint_params(
                     dist_bound=self.dist_bound,
-                    sim_center=self.sim_center,
+                    sim_bound_low=getattr(self, 'sim_bound_low', None),
+                    sim_bound_up=getattr(self, 'sim_bound_up', None),
                     total_data_size=total_data_size,
                     benign_data_sizes=benign_data_sizes
                 )
