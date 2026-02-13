@@ -871,8 +871,8 @@ def main():
         'use_pairwise_similarity_in_constraint': True,  # When True and similarity constraint on: use pairwise sim (align with server_similarity_mode='pairwise') open both to use pairwise sim
         'lambda_sim_low_init': 0.1,  # Initial λ_sim_low(t) value for lower bound constraint: sim_bound_low <= sim_att
         'lambda_sim_up_init': 0.1,   # Initial λ_sim_up(t) value for upper bound constraint: sim_att <= sim_bound_up
-        'lambda_sim_low_lr': 0.1,    # Learning rate for λ_sim_low(t) update
-        'lambda_sim_up_lr': 0.1,     # Learning rate for λ_sim_up(t) update
+        'lambda_sim_low_lr': 0.01,    # Learning rate for λ_sim_low(t) update
+        'lambda_sim_up_lr': 0.01,     # Learning rate for λ_sim_up(t) update
 
         # ========== Augmented Lagrangian Method (ALM) Parameters ==========
         # Standard ALM adds quadratic penalties: (ρ/2) * g(x)^2 for each inequality constraint g(x) ≤ 0.
