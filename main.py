@@ -585,6 +585,50 @@ def print_detailed_statistics(server_log_data, progressive_metrics, local_accura
     
     print("-" * 80)
     
+    # ========== 2b. Euclidean Distance Table ==========
+    print("\n" + "-" * 80)
+    print("2b. EUCLIDEAN DISTANCE (Per Round, Per Client)")
+    print("-" * 80)
+    header = "Round | "
+    for cid in all_client_ids:
+        client_type = "A" if cid in attacker_ids_set else "B"
+        header += f"Client{cid}({client_type}) | "
+    header += "Mean | Std"
+    print(header)
+    print("-" * 80)
+    for log in server_log_data:
+        round_num = log['round']
+        aggregation = log.get('aggregation', {})
+        euclidean_distances = aggregation.get('euclidean_distances', [])
+        accepted = aggregation.get('accepted_clients', [])
+        all_clients_round = sorted(set(accepted))
+        dist_map = {}
+        if len(euclidean_distances) == len(all_clients_round):
+            for idx, cid in enumerate(all_clients_round):
+                dist_map[cid] = euclidean_distances[idx]
+        row = f"{round_num:<6} | "
+        for cid in all_client_ids:
+            d = dist_map.get(cid, 0.0)
+            row += f"{d:<14.6f} | "
+        dist_values = [dist_map.get(cid, 0.0) for cid in all_client_ids if cid in dist_map]
+        mean_d = np.mean(dist_values) if dist_values else 0.0
+        std_d = np.std(dist_values) if len(dist_values) > 1 else 0.0
+        row += f"{mean_d:<6.6f} | {std_d:.6f}"
+        print(row)
+    print("-" * 80)
+    
+    # ========== 2c. Global Loss (Per Round) ==========
+    print("\n" + "-" * 80)
+    print("2c. GLOBAL LOSS (Per Round)")
+    print("-" * 80)
+    print(f"{'Round':<8} | {'Global Loss':<15}")
+    print("-" * 80)
+    for log in server_log_data:
+        round_num = log['round']
+        global_loss = log.get('global_loss', 0.0)
+        print(f"{round_num:<8} | {global_loss:<15.6f}")
+    print("-" * 80)
+    
     # ========== 3. Local Accuracy Table ==========
     print("\n" + "-" * 80)
     print("3️⃣  LOCAL ACCURACY (Per Round, Per Client)")
