@@ -3055,7 +3055,7 @@ class AttackerClient(Client):
                             benign_sim_min = cached_benign_sim_stats['min']
                             benign_sim_max = cached_benign_sim_stats['max']
                             
-                            # Bounds: manual sim_bound_low/up if set, else benign min/max
+                            # Bounds: manual sim_bound_low/up if set; else lower=benign min, upper=benign mean-std
                             if self.sim_bound_low is not None:
                                 actual_bound_low = max(-1.0, min(1.0, float(self.sim_bound_low)))
                             else:
@@ -3063,12 +3063,13 @@ class AttackerClient(Client):
                             if self.sim_bound_up is not None:
                                 actual_bound_up = max(-1.0, min(1.0, float(self.sim_bound_up)))
                             else:
-                                actual_bound_up = torch.clamp(benign_sim_mean, min=-1.0, max=1.0).item()
-                            bounds_src = "manual" if (self.sim_bound_low is not None or self.sim_bound_up is not None) else "benign_min_mean"
+                                upper_auto = benign_sim_mean - benign_sim_std
+                                actual_bound_up = torch.clamp(upper_auto, min=-1.0, max=1.0).item()
+                            bounds_src = "manual" if (self.sim_bound_low is not None or self.sim_bound_up is not None) else "benign_min_mean_std"
                             print(f"    [Attacker {self.client_id}] Similarity stats (relative to aggregation without current attacker): "
                                   f"mean={benign_sim_mean.item():.4f}, std={benign_sim_std.item():.4f}, "
                                   f"min={benign_sim_min.item():.4f}, max={benign_sim_max.item():.4f}, "
-                                  f"bounds=[{bounds_src}]=[{actual_bound_low:.4f}, {actual_bound_up:.4f}] (upper=mean)")
+                                  f"bounds=[{bounds_src}]=[{actual_bound_low:.4f}, {actual_bound_up:.4f}] (upper=mean-std)")
                             
                             if self.use_cosine_similarity_constraint:
                                 initial_sim_bound_low = actual_bound_low
@@ -3095,7 +3096,8 @@ class AttackerClient(Client):
                                     if self.sim_bound_up is not None:
                                         initial_sim_bound_up = max(-1.0, min(1.0, float(self.sim_bound_up)))
                                     else:
-                                        initial_sim_bound_up = torch.clamp(cached_benign_sim_stats['mean'], min=-1.0, max=1.0).item()
+                                        upper_auto = cached_benign_sim_stats['mean'] - cached_benign_sim_stats['std']
+                                        initial_sim_bound_up = torch.clamp(upper_auto, min=-1.0, max=1.0).item()
                                     initial_sim_info = f", initial_sim={initial_sim_att_to_benign:.4f}∈[{initial_sim_bound_low:.4f},{initial_sim_bound_up:.4f}] (constraint disabled)"
                                 else:
                                     initial_sim_info = f", initial_sim={initial_sim_att_to_benign:.4f}"
@@ -3275,7 +3277,8 @@ class AttackerClient(Client):
                     if self.sim_bound_up is not None:
                         sim_bound_up = torch.clamp(torch.tensor(float(self.sim_bound_up), device=target_device, dtype=sim_att_to_benign.dtype), min=-1.0, max=1.0)
                     else:
-                        sim_bound_up = torch.clamp(cached_benign_sim_stats['mean'].to(target_device), min=-1.0, max=1.0)
+                        upper_auto = cached_benign_sim_stats['mean'].to(target_device) - cached_benign_sim_stats['std'].to(target_device)
+                        sim_bound_up = torch.clamp(upper_auto, min=-1.0, max=1.0)
                     
                     # Two-sided constraints (NO ReLU in Lagrangian terms)
                     # g_sim_low = sim_bound_low - sim_att_to_benign <= 0
@@ -3659,7 +3662,11 @@ class AttackerClient(Client):
                     if self.use_cosine_similarity_constraint and cached_benign_sim_stats is not None:
                         sim_att_log = sim_att_to_benign.item()
                         sim_bound_low_log = max(-1.0, min(1.0, float(self.sim_bound_low))) if self.sim_bound_low is not None else max(-1.0, min(1.0, cached_benign_sim_stats['min'].item()))
-                        sim_bound_up_log = max(-1.0, min(1.0, float(self.sim_bound_up))) if self.sim_bound_up is not None else max(-1.0, min(1.0, cached_benign_sim_stats['mean'].item()))
+                        if self.sim_bound_up is not None:
+                            sim_bound_up_log = max(-1.0, min(1.0, float(self.sim_bound_up)))
+                        else:
+                            upper_auto = cached_benign_sim_stats['mean'].item() - cached_benign_sim_stats['std'].item()
+                            sim_bound_up_log = max(-1.0, min(1.0, upper_auto))
                         
                         log_msg += f", sim_att(before={sim_att_log:.4f}, after={sim_att_val_after_step:.4f})∈[{sim_bound_low_log:.4f},{sim_bound_up_log:.4f}], " \
                                    f"λ_sim_low({lambda_sim_low_val:.4f}→{new_lambda_sim_low:.4f}), " \
@@ -3686,7 +3693,11 @@ class AttackerClient(Client):
                     if self.use_cosine_similarity_constraint and cached_benign_sim_stats is not None:
                         sim_att_val = sim_att_val_after_step
                         sim_bound_low_val = max(-1.0, min(1.0, float(self.sim_bound_low))) if self.sim_bound_low is not None else max(-1.0, min(1.0, cached_benign_sim_stats['min'].item()))
-                        sim_bound_up_val = max(-1.0, min(1.0, float(self.sim_bound_up))) if self.sim_bound_up is not None else max(-1.0, min(1.0, cached_benign_sim_stats['mean'].item()))
+                        if self.sim_bound_up is not None:
+                            sim_bound_up_val = max(-1.0, min(1.0, float(self.sim_bound_up)))
+                        else:
+                            upper_auto = cached_benign_sim_stats['mean'].item() - cached_benign_sim_stats['std'].item()
+                            sim_bound_up_val = max(-1.0, min(1.0, upper_auto))
                         sim_satisfied = (sim_att_val >= sim_bound_low_val) and (sim_att_val <= sim_bound_up_val)
                     else:
                         sim_satisfied = True  # If similarity constraint not enabled, consider it satisfied
@@ -3703,7 +3714,11 @@ class AttackerClient(Client):
                             log_msg += f"dist_att={dist_att_val_after_step:.4f} <= dist_bound={dist_bound_val:.4f} "
                             if self.use_cosine_similarity_constraint and cached_benign_sim_stats is not None:
                                 sim_bound_low_log = max(-1.0, min(1.0, float(self.sim_bound_low))) if self.sim_bound_low is not None else max(-1.0, min(1.0, cached_benign_sim_stats['min'].item()))
-                                sim_bound_up_log = max(-1.0, min(1.0, float(self.sim_bound_up))) if self.sim_bound_up is not None else max(-1.0, min(1.0, cached_benign_sim_stats['mean'].item()))
+                                if self.sim_bound_up is not None:
+                                    sim_bound_up_log = max(-1.0, min(1.0, float(self.sim_bound_up)))
+                                else:
+                                    upper_auto = cached_benign_sim_stats['mean'].item() - cached_benign_sim_stats['std'].item()
+                                    sim_bound_up_log = max(-1.0, min(1.0, upper_auto))
                                 log_msg += f", sim_att={sim_att_val_after_step:.4f}∈[{sim_bound_low_log:.4f},{sim_bound_up_log:.4f}] "
                             log_msg += f"for {constraint_satisfied_steps} consecutive steps (step {step}/{self.proxy_steps-1})"
                             print(log_msg)
@@ -3781,7 +3796,8 @@ class AttackerClient(Client):
                     if self.sim_bound_up is not None:
                         final_sim_bound_up = max(-1.0, min(1.0, float(self.sim_bound_up)))
                     else:
-                        final_sim_bound_up = torch.clamp(cached_benign_sim_stats['mean'], min=-1.0, max=1.0).item()
+                        upper_auto = cached_benign_sim_stats['mean'] - cached_benign_sim_stats['std']
+                        final_sim_bound_up = torch.clamp(upper_auto, min=-1.0, max=1.0).item()
                     
                     if self.use_cosine_similarity_constraint:
                         # Compute constraint violations
