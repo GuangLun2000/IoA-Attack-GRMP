@@ -14,6 +14,13 @@
 └── visualization.py          # Visualization module: generates Figure
 ```
 
+## Supported Models
+
+Encoder-only (BERT-style): `distilbert-base-uncased`, `bert-base-uncased`, `roberta-base`, `microsoft/deberta-v3-base`  
+Decoder-only (GPT-style): `gpt2`, `EleutherAI/pythia-160m`, `EleutherAI/pythia-1b`, `facebook/opt-125m`, `Qwen/Qwen2.5-0.5B`
+
+Configure in `main.py` via `model_name`. Use base models (not Instruct) for classification fine-tuning.
+
 ## Dataset
 
 The datasets can be downloaded in the following link:

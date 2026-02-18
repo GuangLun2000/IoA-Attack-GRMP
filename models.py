@@ -4,7 +4,7 @@
 #
 # Supported Model Architectures:
 # - Encoder-only (BERT-style): distilbert-base-uncased, bert-base-uncased, roberta-base, deberta-v3-base
-# - Decoder-only (GPT-style): EleutherAI/pythia-160m, EleutherAI/pythia-1b, facebook/opt-125m, gpt2
+# - Decoder-only (GPT-style): EleutherAI/pythia-160m, EleutherAI/pythia-1b, facebook/opt-125m, gpt2, Qwen/Qwen2.5-0.5B
 
 import torch
 import torch.nn as nn
@@ -61,7 +61,7 @@ class NewsClassifierModel(nn.Module):
     
     Supported Models:
         - Encoder-only: distilbert-base-uncased, bert-base-uncased, roberta-base, deberta-v3-base
-        - Decoder-only: EleutherAI/pythia-160m, EleutherAI/pythia-1b, facebook/opt-125m, gpt2
+        - Decoder-only: EleutherAI/pythia-160m, EleutherAI/pythia-1b, facebook/opt-125m, gpt2, Qwen/Qwen2.5-0.5B
     
     Args:
         model_name: Pre-trained model name or path
@@ -131,8 +131,8 @@ class NewsClassifierModel(nn.Module):
                 # GPT-2 uses c_attn (fused) and c_proj
                 elif "gpt2" in model_name_lower:
                     lora_target_modules = ["c_attn", "c_proj"]
-                # LLaMA / Mistral style
-                elif "llama" in model_name_lower or "mistral" in model_name_lower:
+                # LLaMA / Mistral / Qwen2 style (shared architecture: q_proj, k_proj, v_proj, o_proj)
+                elif "llama" in model_name_lower or "mistral" in model_name_lower or "qwen" in model_name_lower:
                     lora_target_modules = ["q_proj", "k_proj", "v_proj", "o_proj"]
                 # Bloom
                 elif "bloom" in model_name_lower:
