@@ -787,9 +787,9 @@ def main():
         # ========== Dataset Configuration ==========
         # Choose dataset: 'ag_news' | 'imdb' | 'dbpedia' — set num_labels and max_length accordingly
         # Dataset 1: AG News
-        # 'dataset': 'ag_news',  # 'ag_news': news classification (4 classes) | 'imdb': sentiment (2 classes) | 'dbpedia': topic classification (14 classes)
-        # 'num_labels': 4,       # AG News: 4 | IMDB: 2 | DBpedia: 14
-        # 'max_length': 128,     # AG News: 128 (avg ~50 tokens) | IMDB: 512 or 256 (avg ~230 tokens) | DBpedia: 512 (50-3940 chars)
+        'dataset': 'ag_news',  # 'ag_news': news classification (4 classes) | 'imdb': sentiment (2 classes) | 'dbpedia': topic classification (14 classes)
+        'num_labels': 4,       # AG News: 4 | IMDB: 2 | DBpedia: 14
+        'max_length': 128,     # AG News: 128 (avg ~50 tokens) | IMDB: 512 or 256 (avg ~230 tokens) | DBpedia: 512 (50-3940 chars)
         # -------------------------------------------
         # Dataset 2: IMDB
         # 'dataset': 'imdb',   # Uncomment for IMDB; then set num_labels=2, max_length=512 (or 256 for lower memory)
@@ -797,9 +797,9 @@ def main():
         # 'max_length': 512,
         # -------------------------------------------
         # Dataset 3: DBpedia (14 classes, 560K train / 70K test)
-        'dataset': 'dbpedia',   # DBpedia 14: topic classification (14 classes, fancyzhx/dbpedia_14)
-        'num_labels': 14,       # DBpedia: 14 classes
-        'max_length': 512,      # DBpedia: 512 (text length ranges from 50 to 3940 characters)
+        # 'dataset': 'dbpedia',   # DBpedia 14: topic classification (14 classes, fancyzhx/dbpedia_14)
+        # 'num_labels': 14,       # DBpedia: 14 classes
+        # 'max_length': 512,      # DBpedia: 512 (text length ranges from 50 to 3940 characters)
         
         # ========== Data Distribution ==========
         'data_distribution': 'non-iid',  # 'iid' for uniform random, 'non-iid' for Dirichlet-based heterogeneous distribution
@@ -821,11 +821,11 @@ def main():
         # Model configuration
         # Supported models:
         # Encoder-only (BERT-style): 'distilbert-base-uncased', 'bert-base-uncased', 'roberta-base', 'microsoft/deberta-v3-base'
-        'model_name': 'distilbert-base-uncased',  # distilbert 67M
-        # -------------------------------------------
+        # 'model_name': 'distilbert-base-uncased',  # distilbert 67M
+        # # -------------------------------------------
         # Decoder-only (GPT-style): 'gpt2', 'EleutherAI/pythia-160m', 'EleutherAI/pythia-1b', 'facebook/opt-125m', 'Qwen/Qwen2.5-0.5B'
         # 'model_name': 'gpt2',                      # GPT-2 124M — stable decoder baseline
-        # 'model_name': 'EleutherAI/pythia-160m',    # Pythia-160M (may need grad_clip_norm=0.5)
+        'model_name': 'EleutherAI/pythia-160m',    # Pythia-160M (may need grad_clip_norm=0.5)
         # 'model_name': 'facebook/opt-125m',         # OPT-125M (Meta)
         # 'model_name': 'Qwen/Qwen2.5-0.5B',  # Qwen2.5-0.5B ~494M (Alibaba, LLaMA-style arch, Apache 2.0) — use BASE for fine-tuning
         # num_labels and max_length: set above in Dataset Configuration based on chosen dataset
@@ -889,7 +889,7 @@ def main():
         # ========== Augmented Lagrangian Method (ALM) Parameters ==========
         # Standard ALM adds quadratic penalties: (ρ/2) * g(x)^2 for each inequality constraint g(x) ≤ 0.
         'use_augmented_lagrangian': True,   # Enable Augmented Lagrangian (requires use_lagrangian_dual=True)
-        'lambda_update_mode': 'classic',    # Dual variable update: "classic"=λ += lr*g (fixed step), "alm"=λ += ρ*g (penalty-scaled step, standard ALM)
+        'lambda_update_mode': 'alm',    # Dual variable update: "classic"=λ += lr*g (fixed step), "alm"=λ += ρ*g (penalty-scaled step, standard ALM)
         # Penalty parameters ρ (per-constraint): controls quadratic penalty strength (ρ/2)*max(0,g)^2 in ALM objective
         'rho_dist_init': 1.0,
         'rho_sim_low_init': 1.0,
@@ -898,17 +898,17 @@ def main():
         'rho_adaptive': True,
         'rho_theta': 0.5,            # If σ_k > theta * σ_{k-1} then increase ρ
         'rho_increase_factor': 2.0,
-        'rho_min': 1e-3,
+        'rho_min': 1e-4,
         'rho_max': 1e4,
         
         # ========== Proxy Loss Estimation Parameters ==========
         'attacker_use_proxy_data': True,  # If True, GRMP attacker uses proxy set to estimate F(w'_g); if False, no data access (constraint-only optimization)
-        'proxy_sample_size': 128,  # Number of samples in proxy dataset for F(w'_g) estimation (int)
+        'proxy_sample_size': 512,  # Number of samples in proxy dataset for F(w'_g) estimation (int)
                                 # Increased from 128 to 512 for better accuracy (4 batches with test_batch_size=128)
         'proxy_max_batches_opt': 1,  # Max batches per _proxy_global_loss call in optimization loop (int)
                                 # Only has effect when proxy set has >1 batch (proxy_sample_size > test_batch_size).
         'proxy_max_batches_eval': 1,  # Max batches per _proxy_global_loss call in final evaluation (int)
-        
+
     }
 
     # Run experiment (attack if num_attackers > 0, baseline if num_attackers == 0)
