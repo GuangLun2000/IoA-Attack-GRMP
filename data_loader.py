@@ -189,20 +189,30 @@ class DataManager:
     def _load_ag_news(self):
         """
         [OPTIMIZED] Robust data loading with local cache priority.
-        1. Check local .csv files.
-        2. If not found, download from GitHub.
-        3. Strict failure if download fails (No synthetic data).
+        1. Check AG_News_Datasets/ directory first (if exists).
+        2. Check root directory for train.csv/test.csv.
+        3. If not found, download from GitHub.
+        4. Strict failure if download fails (No synthetic data).
         """
+        # Priority 1: Check AG_News_Datasets/ directory
+        train_file_alt = 'AG_News_Datasets/train.csv'
+        test_file_alt = 'AG_News_Datasets/test.csv'
+        # Priority 2: Check root directory
         train_file = 'train.csv'
         test_file = 'test.csv'
         
-        # URLs
+        # URLs (verified: mhjabreel/CharCnn_Keras is a reliable source)
         train_url = "https://raw.githubusercontent.com/mhjabreel/CharCnn_Keras/master/data/ag_news_csv/train.csv"
         test_url = "https://raw.githubusercontent.com/mhjabreel/CharCnn_Keras/master/data/ag_news_csv/test.csv"
 
         try:
-            # 1. Try Local Load
-            if os.path.exists(train_file) and os.path.exists(test_file):
+            # 1. Try Local Load (Priority 1: AG_News_Datasets/ directory)
+            if os.path.exists(train_file_alt) and os.path.exists(test_file_alt):
+                print(f"  ✅ Found local data files in AG_News_Datasets/ directory. Loading...")
+                train_df = pd.read_csv(train_file_alt, header=None, names=['label', 'title', 'text'])
+                test_df = pd.read_csv(test_file_alt, header=None, names=['label', 'title', 'text'])
+            # Priority 2: Check root directory
+            elif os.path.exists(train_file) and os.path.exists(test_file):
                 print(f"  ✅ Found local data files ({train_file}, {test_file}). Loading...")
                 train_df = pd.read_csv(train_file, header=None, names=['label', 'title', 'text'])
                 test_df = pd.read_csv(test_file, header=None, names=['label', 'title', 'text'])
@@ -210,11 +220,12 @@ class DataManager:
             # 2. Try Download
             else:
                 print("  🌐 Local data not found. Downloading from GitHub...")
+                print(f"     Source: {train_url}")
                 
                 # Train Data
                 with urllib.request.urlopen(train_url, timeout=20) as response:
                     data = response.read().decode('utf-8')
-                    # Save to local for next time
+                    # Save to root directory for next time
                     with open(train_file, 'w', encoding='utf-8') as f:
                         f.write(data)
                     train_df = pd.read_csv(io.StringIO(data), header=None, names=['label', 'title', 'text'])
