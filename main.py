@@ -40,7 +40,7 @@ def setup_experiment(config):
     print("=" * 50)
 
     # 1. Initialize Data Manager
-    # dataset: 'ag_news' | 'imdb' — select dataset; num_labels and max_length must match (see config below)
+    # dataset: 'ag_news' | 'imdb' | 'dbpedia' — select dataset; num_labels and max_length must match (see config below)
     data_manager = DataManager(
         num_clients=config['num_clients'],
         num_attackers=config['num_attackers'],
@@ -790,23 +790,28 @@ def main():
         'alpha': 0.0,  # FedProx proximal coefficient μ: loss += (μ/2)*||w - w_global||². Set 0 for standard FedAvg, >0 to penalize local drift from global model (helps Non-IID stability)
         
         # ========== Dataset Configuration ==========
-        # Choose dataset: 'ag_news' | 'imdb' — set num_labels and max_length accordingly
+        # Choose dataset: 'ag_news' | 'imdb' | 'dbpedia' — set num_labels and max_length accordingly
         # Dataset 1: AG News
-        # 'dataset': 'ag_news',  # 'ag_news': news classification (4 classes) | 'imdb': sentiment (2 classes, stanfordnlp/imdb)
-        # 'num_labels': 4,       # AG News: 4 | IMDB: 2
-        # 'max_length': 128,     # AG News: 128 (avg ~50 tokens) | IMDB: 512 or 256 (avg ~230 tokens, longer texts)
+        # 'dataset': 'ag_news',  # 'ag_news': news classification (4 classes) | 'imdb': sentiment (2 classes) | 'dbpedia': topic classification (14 classes)
+        # 'num_labels': 4,       # AG News: 4 | IMDB: 2 | DBpedia: 14
+        # 'max_length': 128,     # AG News: 128 (avg ~50 tokens) | IMDB: 512 or 256 (avg ~230 tokens) | DBpedia: 512 (50-3940 chars)
         
         # Dataset 2: IMDB
-        'dataset': 'imdb',   # Uncomment for IMDB; then set num_labels=2, max_length=512 (or 256 for lower memory)
-        'num_labels': 2,
-        'max_length': 512,
+        # 'dataset': 'imdb',   # Uncomment for IMDB; then set num_labels=2, max_length=512 (or 256 for lower memory)
+        # 'num_labels': 2,
+        # 'max_length': 512,
+        
+        # Dataset 3: DBpedia (14 classes, 560K train / 70K test)
+        'dataset': 'dbpedia',   # DBpedia 14: topic classification (14 classes, fancyzhx/dbpedia_14)
+        'num_labels': 14,       # DBpedia: 14 classes
+        'max_length': 512,      # DBpedia: 512 (text length ranges from 50 to 3940 characters)
         
         # ========== Data Distribution ==========
         'data_distribution': 'non-iid',  # 'iid' for uniform random, 'non-iid' for Dirichlet-based heterogeneous distribution
         'dirichlet_alpha': 0.3,  # Only used when data_distribution='non-iid'. Lower = more heterogeneous, higher = more balanced
-        # 'dataset_size_limit': None,  # Limit dataset size (None = full dataset). AG News: ~120K train; IMDB: 25K train
-        'dataset_size_limit': 20000,  # Limit for faster experimentation (None = full dataset)
-        # 'dataset_size_limit': 10000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
+        # 'dataset_size_limit': None,  # Limit dataset size (None = full dataset). AG News: ~120K train; IMDB: 25K train; DBpedia: 560K train
+        # 'dataset_size_limit': 20000,  # Limit for faster experimentation (None = full dataset). When set, only limits training set; test set remains full for fair evaluation
+        'dataset_size_limit': None,  # Use full dataset for paper reproduction (recommended)
 
         # ========== Training Mode Configuration ==========
         'use_lora': True,  # True for LoRA fine-tuning, False for full fine-tuning

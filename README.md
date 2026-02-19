@@ -25,8 +25,11 @@ Configure in `main.py` via `model_name`. Use base models (not Instruct) for clas
 
 - **AG News**: `dataset='ag_news'`, `num_labels=4`, `max_length=128` (default)
 - **IMDB** (stanfordnlp/imdb): `dataset='imdb'`, `num_labels=2`, `max_length=512` (or 256 for lower memory)
+- **DBpedia 14** (fancyzhx/dbpedia_14): `dataset='dbpedia'`, `num_labels=14`, `max_length=512` (14 topic classes, 560K train / 70K test)
 
 Configure in `main.py` via `dataset`, `num_labels`, and `max_length`.
+
+**Note on dataset_size_limit**: When `dataset_size_limit` is set, only the training set is limited for faster experimentation; the test set remains full to ensure fair and stable evaluation.
 
 ## Dataset Download (AG News)
 

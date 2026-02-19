@@ -1,5 +1,5 @@
 # data_loader.py
-# Data loader for text classification (AG News, IMDB) for federated experiments.
+# Data loader for text classification (AG News, IMDB, DBpedia) for federated experiments.
 # Note: data-agnostic attack setting — no training-time label flipping is performed.
 
 import torch
@@ -21,7 +21,7 @@ LABEL_SCITECH = 3
 TARGET_LABEL = LABEL_SPORTS  # Attack target: Business -> Sports
 
 class NewsDataset(Dataset):
-    """Custom Dataset for text classification (AG News, IMDB, etc.)"""
+    """Custom Dataset for text classification (AG News, IMDB, DBpedia, etc.)"""
 
     def __init__(self, texts, labels, tokenizer, max_length=128,
                 include_target_mask: bool = False):
@@ -59,7 +59,7 @@ class NewsDataset(Dataset):
 
 
 class DataManager:
-    """Manages text classification data distribution (AG News, IMDB) for federated experiments (data-agnostic attack setting)"""
+    """Manages text classification data distribution (AG News, IMDB, DBpedia) for federated experiments (data-agnostic attack setting)"""
 
     def __init__(self, num_clients, num_attackers, test_seed,
                  dataset_size_limit=None, batch_size=None, test_batch_size=None,
@@ -74,11 +74,12 @@ class DataManager:
             num_attackers: Number of attacker clients (required)
             test_seed: Random seed for test sampling (required)
             dataset_size_limit: Limit dataset size (None = full dataset). For paper reproduction, use None.
+                               When set, only limits training set; test set remains full for fair evaluation.
             batch_size: Batch size for training data loaders (required)
             test_batch_size: Batch size for test/validation data loaders (required)
             model_name: Hugging Face model name for tokenizer initialization
-            max_length: Max token length (AG News: 128, IMDB: 256-512)
-            dataset: 'ag_news' | 'imdb' (IMDB from stanfordnlp/imdb on Hugging Face)
+            max_length: Max token length (AG News: 128, IMDB: 256-512, DBpedia: 512)
+            dataset: 'ag_news' | 'imdb' | 'dbpedia' (IMDB: stanfordnlp/imdb, DBpedia: fancyzhx/dbpedia_14)
         """
 
         if batch_size is None or test_batch_size is None:
@@ -108,6 +109,8 @@ class DataManager:
 
         if self.dataset == "imdb":
             print("Loading IMDB dataset (stanfordnlp/imdb)...")
+        elif self.dataset == "dbpedia":
+            print("Loading DBpedia dataset (fancyzhx/dbpedia_14)...")
         else:
             print("Loading AG News dataset...")
         self._load_data()
@@ -116,6 +119,8 @@ class DataManager:
         """Dispatch to dataset-specific loader."""
         if self.dataset == "imdb":
             self._load_imdb()
+        elif self.dataset == "dbpedia":
+            self._load_dbpedia()
         else:
             self._load_ag_news()
 
@@ -140,16 +145,46 @@ class DataManager:
         if self.dataset_size_limit is not None and self.dataset_size_limit > 0:
             rng = np.random.default_rng(42)
             n_train = min(self.dataset_size_limit, len(self.train_texts))
-            n_test = min(int(self.dataset_size_limit * 0.15), len(self.test_texts))
             idx_train = rng.choice(len(self.train_texts), n_train, replace=False)
-            idx_test = rng.choice(len(self.test_texts), n_test, replace=False)
             self.train_texts = [self.train_texts[i] for i in idx_train]
             self.train_labels = [self.train_labels[i] for i in idx_train]
-            self.test_texts = [self.test_texts[i] for i in idx_test]
-            self.test_labels = [self.test_labels[i] for i in idx_test]
-            print(f"  ⚠️  Using limited size: Train={len(self.train_texts)}, Test={len(self.test_texts)}")
+            # Keep full test set for fair and stable evaluation (IMDB test has 25K; do not apply 0.15 limit)
+            print(f"  ⚠️  Using limited train size: {len(self.train_texts)}; Test set unchanged: {len(self.test_texts)}")
 
         print(f"  ✅ IMDB ready! Train: {len(self.train_texts)}, Test: {len(self.test_texts)}")
+
+    def _load_dbpedia(self):
+        """Load DBpedia 14 dataset from Hugging Face (fancyzhx/dbpedia_14)."""
+        try:
+            from datasets import load_dataset
+        except ImportError:
+            raise ImportError("DBpedia requires datasets library. Install: pip install datasets")
+
+        ds = load_dataset("fancyzhx/dbpedia_14")
+        train_data = ds["train"]
+        test_data = ds["test"]
+
+        # DBpedia has 'title' and 'content' fields; combine them like AG News
+        train_texts_combined = [f"{str(title)} {str(content)}" for title, content in zip(train_data["title"], train_data["content"])]
+        test_texts_combined = [f"{str(title)} {str(content)}" for title, content in zip(test_data["title"], test_data["content"])]
+
+        self.train_texts = train_texts_combined
+        self.train_labels = list(train_data["label"])
+        self.test_texts = test_texts_combined
+        self.test_labels = list(test_data["label"])
+
+        print(f"  📊 Full DBpedia Dataset: Train={len(self.train_texts)}, Test={len(self.test_texts)}")
+
+        if self.dataset_size_limit is not None and self.dataset_size_limit > 0:
+            rng = np.random.default_rng(42)
+            n_train = min(self.dataset_size_limit, len(self.train_texts))
+            idx_train = rng.choice(len(self.train_texts), n_train, replace=False)
+            self.train_texts = [self.train_texts[i] for i in idx_train]
+            self.train_labels = [self.train_labels[i] for i in idx_train]
+            # Keep full test set for fair and stable evaluation (DBpedia test has 70K; do not apply limit)
+            print(f"  ⚠️  Using limited train size: {len(self.train_texts)}; Test set unchanged: {len(self.test_texts)}")
+
+        print(f"  ✅ DBpedia ready! Train: {len(self.train_texts)}, Test: {len(self.test_texts)}")
 
     def _load_ag_news(self):
         """
