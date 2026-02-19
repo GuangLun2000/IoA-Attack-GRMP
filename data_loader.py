@@ -126,7 +126,7 @@ class DataManager:
         except ImportError:
             raise ImportError("IMDB requires datasets library. Install: pip install datasets")
 
-        ds = load_dataset("stanfordnlp/imdb", trust_remote_code=True)
+        ds = load_dataset("stanfordnlp/imdb")
         train_data = ds["train"]
         test_data = ds["test"]
 
