@@ -452,28 +452,23 @@ def run_experiment(config):
                             config['experiment_name'], results_dir)
     
     # Generate visualizations
-    if config.get('generate_plots', True):
-        print("\n" + "=" * 60)
-        print("Generating Visualization Plots")
-        print("=" * 60)
-        
-        visualizer = ExperimentVisualizer(results_dir=results_dir)
-        
-        # Extract attacker IDs
-        attacker_ids = [client.client_id for client in server.clients 
-                       if getattr(client, 'is_attacker', False)]
-        
-        # Generate all figures
-        visualizer.generate_all_figures(
-            server_log_data=server.log_data,
-            local_accuracies=server.history['local_accuracies'],
-            attacker_ids=attacker_ids,
-            experiment_name=config['experiment_name'],
-            num_rounds=config['num_rounds'],
-            attack_start_round=config['attack_start_round'],
-            num_clients=config['num_clients'],
-            num_attackers=config['num_attackers']
-        )
+    print("\n" + "=" * 60)
+    print("Generating Visualization Plots")
+    print("=" * 60)
+    
+    visualizer = ExperimentVisualizer(results_dir=results_dir)
+    
+    # Generate all figures
+    visualizer.generate_all_figures(
+        server_log_data=server.log_data,
+        local_accuracies=server.history['local_accuracies'],
+        attacker_ids=attacker_ids,
+        experiment_name=config['experiment_name'],
+        num_rounds=config['num_rounds'],
+        attack_start_round=config['attack_start_round'],
+        num_clients=config['num_clients'],
+        num_attackers=config['num_attackers']
+    )
     
     return server.log_data, progressive_metrics
 
@@ -795,12 +790,12 @@ def main():
         # 'dataset': 'ag_news',  # 'ag_news': news classification (4 classes) | 'imdb': sentiment (2 classes) | 'dbpedia': topic classification (14 classes)
         # 'num_labels': 4,       # AG News: 4 | IMDB: 2 | DBpedia: 14
         # 'max_length': 128,     # AG News: 128 (avg ~50 tokens) | IMDB: 512 or 256 (avg ~230 tokens) | DBpedia: 512 (50-3940 chars)
-        
+        # -------------------------------------------
         # Dataset 2: IMDB
         # 'dataset': 'imdb',   # Uncomment for IMDB; then set num_labels=2, max_length=512 (or 256 for lower memory)
         # 'num_labels': 2,
         # 'max_length': 512,
-        
+        # -------------------------------------------
         # Dataset 3: DBpedia (14 classes, 560K train / 70K test)
         'dataset': 'dbpedia',   # DBpedia 14: topic classification (14 classes, fancyzhx/dbpedia_14)
         'num_labels': 14,       # DBpedia: 14 classes
@@ -827,7 +822,7 @@ def main():
         # Supported models:
         # Encoder-only (BERT-style): 'distilbert-base-uncased', 'bert-base-uncased', 'roberta-base', 'microsoft/deberta-v3-base'
         'model_name': 'distilbert-base-uncased',  # distilbert 67M
-        
+        # -------------------------------------------
         # Decoder-only (GPT-style): 'gpt2', 'EleutherAI/pythia-160m', 'EleutherAI/pythia-1b', 'facebook/opt-125m', 'Qwen/Qwen2.5-0.5B'
         # 'model_name': 'gpt2',                      # GPT-2 124M — stable decoder baseline
         # 'model_name': 'EleutherAI/pythia-160m',    # Pythia-160M (may need grad_clip_norm=0.5)
@@ -914,8 +909,6 @@ def main():
                                 # Only has effect when proxy set has >1 batch (proxy_sample_size > test_batch_size).
         'proxy_max_batches_eval': 1,  # Max batches per _proxy_global_loss call in final evaluation (int)
         
-        # ========== Visualization ==========
-        'generate_plots': True,  # Whether to generate visualization plots (bool)
     }
 
     # Run experiment (attack if num_attackers > 0, baseline if num_attackers == 0)
