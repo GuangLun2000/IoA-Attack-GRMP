@@ -40,8 +40,7 @@ def setup_experiment(config):
     print("=" * 50)
 
     # 1. Initialize Data Manager
-    # Note: dataset_size_limit=None uses FULL AG News dataset (~120K train, ~7.6K test) per paper
-    # Set dataset_size_limit to a positive int (e.g., 30000) only for faster experimentation
+    # dataset: 'ag_news' | 'imdb' — select dataset; num_labels and max_length must match (see config below)
     data_manager = DataManager(
         num_clients=config['num_clients'],
         num_attackers=config['num_attackers'],
@@ -50,7 +49,8 @@ def setup_experiment(config):
         batch_size=config['batch_size'],
         test_batch_size=config['test_batch_size'],
         model_name=config.get('model_name', 'distilbert-base-uncased'),
-        max_length=config.get('max_length', 128)
+        max_length=config.get('max_length', 128),
+        dataset=config.get('dataset', 'ag_news')
     )
 
     # 2. Partition data among clients
@@ -58,7 +58,7 @@ def setup_experiment(config):
     data_distribution = config.get('data_distribution', 'non-iid').lower()
     indices = np.arange(len(data_manager.train_texts))
     labels = np.array(data_manager.train_labels)
-    num_labels = 4
+    num_labels = config.get('num_labels', 4)
     num_clients = config['num_clients']
     num_attackers = config.get('num_attackers', 0)
     num_benign = num_clients - num_attackers
@@ -770,7 +770,7 @@ def main():
     config = {
         # ========== Experiment Configuration ==========
         'experiment_name': 'vgae_grmp_attack',  # Name for result files and logs
-        'seed': 42069,  # Random seed for reproducibility (int), 42 is the default
+        'seed': 42,  # Random seed for reproducibility (int), 42 is the default
         
         # ========== Federated Learning Setup ==========
         'num_clients': 7,  # Total number of federated learning clients (int)
@@ -784,16 +784,28 @@ def main():
         'client_lr': 5e-5,  # Learning rate for local client training (float)
         'server_lr': 1.0,  # Server learning rate for model aggregation (fixed at 1.0)
         'batch_size': 128,  # Batch size for local training (int)
-        'test_batch_size': 256,  # Batch size for test/validation data loaders (int)
+        'test_batch_size': 512,  # Batch size for test/validation data loaders (int)
         'local_epochs': 5,  # Number of local training epochs per round (int, per paper Section IV)
         'grad_clip_norm': 1.0,  # Benign client grad clipping. Decoder models: Pythia-160m try 0.5 if nan; Qwen2.5-0.5B typically stable at 1.0
         'alpha': 0.0,  # FedProx proximal coefficient μ: loss += (μ/2)*||w - w_global||². Set 0 for standard FedAvg, >0 to penalize local drift from global model (helps Non-IID stability)
         
-        # ========== Data Distribution ==========··
+        # ========== Dataset Configuration ==========
+        # Choose dataset: 'ag_news' | 'imdb' — set num_labels and max_length accordingly
+        # Dataset 1: AG News
+        # 'dataset': 'ag_news',  # 'ag_news': news classification (4 classes) | 'imdb': sentiment (2 classes, stanfordnlp/imdb)
+        # 'num_labels': 4,       # AG News: 4 | IMDB: 2
+        # 'max_length': 128,     # AG News: 128 (avg ~50 tokens) | IMDB: 512 or 256 (avg ~230 tokens, longer texts)
+        
+        # Dataset 2: IMDB
+        'dataset': 'imdb',   # Uncomment for IMDB; then set num_labels=2, max_length=512 (or 256 for lower memory)
+        'num_labels': 2,
+        'max_length': 512,
+        
+        # ========== Data Distribution ==========
         'data_distribution': 'non-iid',  # 'iid' for uniform random, 'non-iid' for Dirichlet-based heterogeneous distribution
         'dirichlet_alpha': 0.3,  # Only used when data_distribution='non-iid'. Lower = more heterogeneous, higher = more balanced
-        # 'dataset_size_limit': None,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
-        'dataset_size_limit': 20000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
+        # 'dataset_size_limit': None,  # Limit dataset size (None = full dataset). AG News: ~120K train; IMDB: 25K train
+        'dataset_size_limit': 20000,  # Limit for faster experimentation (None = full dataset)
         # 'dataset_size_limit': 10000,  # Limit dataset size for faster experimentation (None = use FULL AG News dataset per paper, int = limit training samples)
 
         # ========== Training Mode Configuration ==========
@@ -809,15 +821,14 @@ def main():
         # Model configuration
         # Supported models:
         # Encoder-only (BERT-style): 'distilbert-base-uncased', 'bert-base-uncased', 'roberta-base', 'microsoft/deberta-v3-base'
-        # 'model_name': 'distilbert-base-uncased',  # distilbert 67M
+        'model_name': 'distilbert-base-uncased',  # distilbert 67M
         
         # Decoder-only (GPT-style): 'gpt2', 'EleutherAI/pythia-160m', 'EleutherAI/pythia-1b', 'facebook/opt-125m', 'Qwen/Qwen2.5-0.5B'
         # 'model_name': 'gpt2',                      # GPT-2 124M — stable decoder baseline
-        'model_name': 'EleutherAI/pythia-160m',    # Pythia-160M (may need grad_clip_norm=0.5)
+        # 'model_name': 'EleutherAI/pythia-160m',    # Pythia-160M (may need grad_clip_norm=0.5)
         # 'model_name': 'facebook/opt-125m',         # OPT-125M (Meta)
         # 'model_name': 'Qwen/Qwen2.5-0.5B',  # Qwen2.5-0.5B ~494M (Alibaba, LLaMA-style arch, Apache 2.0) — use BASE for fine-tuning
-        'num_labels': 4,  # Number of classification labels (AG News: 4, IMDB: 2)
-        'max_length': 128,  # Max token length for tokenizer. AG News: 128 (avg ~50 tokens), IMDB: 256-512 (avg ~230 tokens)
+        # num_labels and max_length: set above in Dataset Configuration based on chosen dataset
         
 
         # ========== Attack Configuration ==========

@@ -21,9 +21,16 @@ Decoder-only (GPT-style): `gpt2`, `EleutherAI/pythia-160m`, `EleutherAI/pythia-1
 
 Configure in `main.py` via `model_name`. Use base models (not Instruct) for classification fine-tuning.
 
-## Dataset
+## Supported Datasets
 
-The datasets can be downloaded in the following link:
+- **AG News**: `dataset='ag_news'`, `num_labels=4`, `max_length=128` (default)
+- **IMDB** (stanfordnlp/imdb): `dataset='imdb'`, `num_labels=2`, `max_length=512` (or 256 for lower memory)
+
+Configure in `main.py` via `dataset`, `num_labels`, and `max_length`.
+
+## Dataset Download (AG News)
+
+AG News is loaded from local CSV or downloaded automatically. Manual links:
 ```python
 url = "https://www.kaggle.com/datasets/amananandrai/ag-news-classification-dataset"
 train_url = "https://raw.githubusercontent.com/mhjabreel/CharCnn_Keras/master/data/ag_news_csv/train.csv"
