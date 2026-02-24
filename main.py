@@ -769,7 +769,7 @@ def main():
         
         # ========== Federated Learning Setup ==========
         'num_clients': 7,  # Total number of federated learning clients (int)
-        'num_attackers': 2,  # Number of attacker clients (int, must be < num_clients)
+        'num_attackers': 0,  # Number of attacker clients (int, must be < num_clients)
         'num_benign_clients': None,  # Optional: Explicit number of benign clients for baseline experiment
                                     # If None, baseline will use (num_clients - num_attackers) to ensure fair comparison
                                     # If set, baseline experiment will use exactly this many benign clients
@@ -779,7 +779,7 @@ def main():
         'client_lr': 5e-5,  # Learning rate for local client training (float)
         'server_lr': 1.0,  # Server learning rate for model aggregation (fixed at 1.0)
         'batch_size': 128,  # Batch size for local training (int)
-        'test_batch_size': 256,  # Batch size for test/validation data loaders (int)
+        'test_batch_size': 512,  # Batch size for test/validation data loaders (int)
         'local_epochs': 5,  # Number of local training epochs per round (int, per paper Section IV)
         'grad_clip_norm': 1.0,  # Benign client grad clipping. Decoder models: Pythia-160m try 0.5 if nan; Qwen2.5-0.5B typically stable at 1.0
         'alpha': 0.0,  # FedProx proximal coefficient μ: loss += (μ/2)*||w - w_global||². Set 0 for standard FedAvg, >0 to penalize local drift from global model (helps Non-IID stability)
@@ -787,9 +787,9 @@ def main():
         # ========== Dataset Configuration ==========
         # Choose dataset: 'ag_news' | 'imdb' | 'dbpedia' — set num_labels and max_length accordingly
         # Dataset 1: AG News
-        'dataset': 'ag_news',  # 'ag_news': news classification (4 classes) | 'imdb': sentiment (2 classes) | 'dbpedia': topic classification (14 classes)
-        'num_labels': 4,       # AG News: 4 | IMDB: 2 | DBpedia: 14
-        'max_length': 128,     # AG News: 128 (avg ~50 tokens) | IMDB: 512 or 256 (avg ~230 tokens) | DBpedia: 512 (50-3940 chars)
+        # 'dataset': 'ag_news',  # 'ag_news': news classification (4 classes) | 'imdb': sentiment (2 classes) | 'dbpedia': topic classification (14 classes)
+        # 'num_labels': 4,       # AG News: 4 | IMDB: 2 | DBpedia: 14
+        # 'max_length': 128,     # AG News: 128 (avg ~50 tokens) | IMDB: 512 or 256 (avg ~230 tokens) | DBpedia: 512 (50-3940 chars)
         # -------------------------------------------
         # Dataset 2: IMDB
         # 'dataset': 'imdb',   # Uncomment for IMDB; then set num_labels=2, max_length=512 (or 256 for lower memory)
@@ -797,16 +797,15 @@ def main():
         # 'max_length': 512,
         # -------------------------------------------
         # Dataset 3: DBpedia (14 classes, 560K train / 70K test)
-        # 'dataset': 'dbpedia',   # DBpedia 14: topic classification (14 classes, fancyzhx/dbpedia_14)
-        # 'num_labels': 14,       # DBpedia: 14 classes
-        # 'max_length': 512,      # DBpedia: 512 (text length ranges from 50 to 3940 characters)
+        'dataset': 'dbpedia',   # DBpedia 14: topic classification (14 classes, fancyzhx/dbpedia_14)
+        'num_labels': 14,       # DBpedia: 14 classes
+        'max_length': 512,      # DBpedia: 512 (text length ranges from 50 to 3940 characters)
         
         # ========== Data Distribution ==========
         'data_distribution': 'non-iid',  # 'iid' for uniform random, 'non-iid' for Dirichlet-based heterogeneous distribution
         'dirichlet_alpha': 0.3,  # Only used when data_distribution='non-iid'. Lower = more heterogeneous, higher = more balanced
         # 'dataset_size_limit': None,  # Limit dataset size (None = full dataset). AG News: ~120K train; IMDB: 25K train; DBpedia: 560K train
-        # 'dataset_size_limit': 20000,  # Limit for faster experimentation (None = full dataset). When set, only limits training set; test set remains full for fair evaluation
-        'dataset_size_limit': None,  # Use full dataset for paper reproduction (recommended)
+        'dataset_size_limit': 20000,  # Limit for faster experimentation (None = full dataset). When set, only limits training set; test set remains full for fair evaluation
 
         # ========== Training Mode Configuration ==========
         'use_lora': True,  # True for LoRA fine-tuning, False for full fine-tuning
@@ -821,11 +820,11 @@ def main():
         # Model configuration
         # Supported models:
         # Encoder-only (BERT-style): 'distilbert-base-uncased', 'bert-base-uncased', 'roberta-base', 'microsoft/deberta-v3-base'
-        # 'model_name': 'distilbert-base-uncased',  # distilbert 67M
+        'model_name': 'distilbert-base-uncased',  # distilbert 67M
         # # -------------------------------------------
         # Decoder-only (GPT-style): 'gpt2', 'EleutherAI/pythia-160m', 'EleutherAI/pythia-1b', 'facebook/opt-125m', 'Qwen/Qwen2.5-0.5B'
         # 'model_name': 'gpt2',                      # GPT-2 124M — stable decoder baseline
-        'model_name': 'EleutherAI/pythia-160m',    # Pythia-160M (may need grad_clip_norm=0.5)
+        # 'model_name': 'EleutherAI/pythia-160m',    # Pythia-160M (may need grad_clip_norm=0.5)
         # 'model_name': 'facebook/opt-125m',         # OPT-125M (Meta)
         # 'model_name': 'Qwen/Qwen2.5-0.5B',  # Qwen2.5-0.5B ~494M (Alibaba, LLaMA-style arch, Apache 2.0) — use BASE for fine-tuning
         # num_labels and max_length: set above in Dataset Configuration based on chosen dataset
@@ -860,7 +859,7 @@ def main():
 
         # ========== GRMP Attack Optimization Parameters ==========
         'proxy_step': 0.001,  # Step size for gradient-free ascent toward global-loss proxy
-        'proxy_steps': 200,  # Number of optimization steps for attack objective (int)
+        'proxy_steps': 150,  # Number of optimization steps for attack objective (int)
         'attacker_proxy_grad_clip_norm': 1.0,  # GRMP attacker proxy parameter update only; separate from benign training
         'attacker_claimed_data_size': None,  # None = use actual assigned data size
         'early_stop_constraint_stability_steps': 1,  # Early stopping: stop after N consecutive steps satisfying constraint (int)
