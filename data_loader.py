@@ -145,11 +145,14 @@ class DataManager:
         if self.dataset_size_limit is not None and self.dataset_size_limit > 0:
             rng = np.random.default_rng(42)
             n_train = min(self.dataset_size_limit, len(self.train_texts))
+            n_test = min(int(self.dataset_size_limit * 0.15), len(self.test_texts))
             idx_train = rng.choice(len(self.train_texts), n_train, replace=False)
+            idx_test = rng.choice(len(self.test_texts), n_test, replace=False)
             self.train_texts = [self.train_texts[i] for i in idx_train]
             self.train_labels = [self.train_labels[i] for i in idx_train]
-            # Keep full test set for fair and stable evaluation (IMDB test has 25K; do not apply 0.15 limit)
-            print(f"  ⚠️  Using limited train size: {len(self.train_texts)}; Test set unchanged: {len(self.test_texts)}")
+            self.test_texts = [self.test_texts[i] for i in idx_test]
+            self.test_labels = [self.test_labels[i] for i in idx_test]
+            print(f"  ⚠️  Using limited size: Train={len(self.train_texts)}, Test={len(self.test_texts)} (test = train_limit × 0.15)")
 
         print(f"  ✅ IMDB ready! Train: {len(self.train_texts)}, Test: {len(self.test_texts)}")
 
@@ -178,11 +181,14 @@ class DataManager:
         if self.dataset_size_limit is not None and self.dataset_size_limit > 0:
             rng = np.random.default_rng(42)
             n_train = min(self.dataset_size_limit, len(self.train_texts))
+            n_test = min(int(self.dataset_size_limit * 0.15), len(self.test_texts))
             idx_train = rng.choice(len(self.train_texts), n_train, replace=False)
+            idx_test = rng.choice(len(self.test_texts), n_test, replace=False)
             self.train_texts = [self.train_texts[i] for i in idx_train]
             self.train_labels = [self.train_labels[i] for i in idx_train]
-            # Keep full test set for fair and stable evaluation (DBpedia test has 70K; do not apply limit)
-            print(f"  ⚠️  Using limited train size: {len(self.train_texts)}; Test set unchanged: {len(self.test_texts)}")
+            self.test_texts = [self.test_texts[i] for i in idx_test]
+            self.test_labels = [self.test_labels[i] for i in idx_test]
+            print(f"  ⚠️  Using limited size: Train={len(self.train_texts)}, Test={len(self.test_texts)} (test = train_limit × 0.15)")
 
         print(f"  ✅ DBpedia ready! Train: {len(self.train_texts)}, Test: {len(self.test_texts)}")
 
