@@ -40,7 +40,7 @@ def setup_experiment(config):
     print("=" * 50)
 
     # 1. Initialize Data Manager
-    # dataset: 'ag_news' | 'imdb' | 'dbpedia' — select dataset; num_labels and max_length must match (see config below)
+    # dataset: 'ag_news' | 'imdb' | 'dbpedia' | 'yahoo_answers' — select dataset; num_labels and max_length must match (see config below)
     data_manager = DataManager(
         num_clients=config['num_clients'],
         num_attackers=config['num_attackers'],
@@ -779,33 +779,38 @@ def main():
         'client_lr': 5e-5,  # Learning rate for local client training (float)
         'server_lr': 1.0,  # Server learning rate for model aggregation (fixed at 1.0)
         'batch_size': 128,  # Batch size for local training (int)
-        'test_batch_size': 512,  # Batch size for test/validation data loaders (int)
-        'local_epochs': 5,  # Number of local training epochs per round (int, per paper Section IV)
+        'test_batch_size': 256,  # Batch size for test/validation data loaders (int)
+        'local_epochs': 2,  # Number of local training epochs per round (int, per paper Section IV)
         'grad_clip_norm': 1.0,  # Benign client grad clipping. Decoder models: Pythia-160m try 0.5 if nan; Qwen2.5-0.5B typically stable at 1.0
         'alpha': 0.0,  # FedProx proximal coefficient μ: loss += (μ/2)*||w - w_global||². Set 0 for standard FedAvg, >0 to penalize local drift from global model (helps Non-IID stability)
         
         # ========== Dataset Configuration ==========
-        # Choose dataset: 'ag_news' | 'imdb' | 'dbpedia' — set num_labels and max_length accordingly
+        # Choose dataset: 'ag_news' | 'imdb' | 'dbpedia' | 'yahoo_answers' — set num_labels and max_length accordingly
         # Dataset 1: AG News
-        # 'dataset': 'ag_news',  # 'ag_news': news classification (4 classes) | 'imdb': sentiment (2 classes) | 'dbpedia': topic classification (14 classes)
-        # 'num_labels': 4,       # AG News: 4 | IMDB: 2 | DBpedia: 14
-        # 'max_length': 128,     # AG News: 128 (avg ~50 tokens) | IMDB: 512 or 256 (avg ~230 tokens) | DBpedia: 512 (50-3940 chars)
+        # 'dataset': 'ag_news',  # news classification (4 classes)
+        # 'num_labels': 4,       # AG News: 4 | IMDB: 2 | DBpedia: 14 | Yahoo Answers: 10
+        # 'max_length': 128,     # AG News: 128 | IMDB: 512/256 | DBpedia: 512 | Yahoo Answers: 256
         # -------------------------------------------
         # Dataset 2: IMDB
-        # 'dataset': 'imdb',   # Uncomment for IMDB; then set num_labels=2, max_length=512 (or 256 for lower memory)
+        # 'dataset': 'imdb',   # sentiment (2 classes)
         # 'num_labels': 2,
         # 'max_length': 512,
         # -------------------------------------------
         # Dataset 3: DBpedia (14 classes, 560K train / 70K test)
-        'dataset': 'dbpedia',   # DBpedia 14: topic classification (14 classes, fancyzhx/dbpedia_14)
-        'num_labels': 14,       # DBpedia: 14 classes
-        'max_length': 512,      # DBpedia: 512 (text length ranges from 50 to 3940 characters)
+        # 'dataset': 'dbpedia',   # topic classification (14 classes)
+        # 'num_labels': 14,
+        # 'max_length': 512,
+        # -------------------------------------------
+        # Dataset 4: Yahoo Answers (10 classes, 1.4M train / 60K test)
+        'dataset': 'yahoo_answers',   # topic classification (10 classes, yassiracharki/Yahoo_Answers_10_categories_for_NLP)
+        'num_labels': 10,       # Yahoo Answers: 10 classes
+        'max_length': 256,      # Yahoo Answers: 256 (Q&A text, similar length to AG News)
         
         # ========== Data Distribution ==========
         'data_distribution': 'non-iid',  # 'iid' for uniform random, 'non-iid' for Dirichlet-based heterogeneous distribution
         'dirichlet_alpha': 0.3,  # Only used when data_distribution='non-iid'. Lower = more heterogeneous, higher = more balanced
-        # 'dataset_size_limit': None,  # Limit dataset size (None = full dataset). AG News: ~120K train; IMDB: 25K train; DBpedia: 560K train
-        'dataset_size_limit': 20000,  # Limit for faster experimentation (None = full dataset). When set, only limits training set; test set remains full for fair evaluation
+        # 'dataset_size_limit': None,  # Limit dataset size (None = full dataset). AG News: ~120K; IMDB: 25K; DBpedia: 560K; Yahoo Answers: 1.4M
+        'dataset_size_limit': 20000,  # Limit for faster experimentation. When set: train ≤ limit, test ≤ limit × 0.15 (same rule for all datasets)
 
         # ========== Training Mode Configuration ==========
         'use_lora': True,  # True for LoRA fine-tuning, False for full fine-tuning
@@ -902,7 +907,7 @@ def main():
         
         # ========== Proxy Loss Estimation Parameters ==========
         'attacker_use_proxy_data': True,  # If True, GRMP attacker uses proxy set to estimate F(w'_g); if False, no data access (constraint-only optimization)
-        'proxy_sample_size': 512,  # Number of samples in proxy dataset for F(w'_g) estimation (int)
+        'proxy_sample_size': 256,  # Number of samples in proxy dataset for F(w'_g) estimation (int)
                                 # Increased from 128 to 512 for better accuracy (4 batches with test_batch_size=128)
         'proxy_max_batches_opt': 1,  # Max batches per _proxy_global_loss call in optimization loop (int)
                                 # Only has effect when proxy set has >1 batch (proxy_sample_size > test_batch_size).

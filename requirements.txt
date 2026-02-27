@@ -9,7 +9,7 @@ matplotlib>=3.4.0
 seaborn>=0.12.0  # Required for seaborn-v0_8-darkgrid style support
 peft>=0.6.0  # For LoRA support
 
-datasets>=2.0.0  # Required for IMDB (stanfordnlp/imdb) and DBpedia (fancyzhx/dbpedia_14) datasets
+datasets>=2.0.0  # Required for IMDB, DBpedia, Yahoo Answers datasets
 
 # Optional: Machine learning utilities (for future use, currently unused)
 # scikit-learn>=1.0.0

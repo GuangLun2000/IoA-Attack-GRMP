@@ -1,5 +1,5 @@
 # data_loader.py
-# Data loader for text classification (AG News, IMDB, DBpedia) for federated experiments.
+# Data loader for text classification (AG News, IMDB, DBpedia, Yahoo Answers) for federated experiments.
 # Note: data-agnostic attack setting — no training-time label flipping is performed.
 
 import torch
@@ -21,7 +21,7 @@ LABEL_SCITECH = 3
 TARGET_LABEL = LABEL_SPORTS  # Attack target: Business -> Sports
 
 class NewsDataset(Dataset):
-    """Custom Dataset for text classification (AG News, IMDB, DBpedia, etc.)"""
+    """Custom Dataset for text classification (AG News, IMDB, DBpedia, Yahoo Answers, etc.)"""
 
     def __init__(self, texts, labels, tokenizer, max_length=128,
                 include_target_mask: bool = False):
@@ -59,7 +59,7 @@ class NewsDataset(Dataset):
 
 
 class DataManager:
-    """Manages text classification data distribution (AG News, IMDB, DBpedia) for federated experiments (data-agnostic attack setting)"""
+    """Manages text classification data distribution (AG News, IMDB, DBpedia, Yahoo Answers) for federated experiments (data-agnostic attack setting)"""
 
     def __init__(self, num_clients, num_attackers, test_seed,
                  dataset_size_limit=None, batch_size=None, test_batch_size=None,
@@ -78,8 +78,8 @@ class DataManager:
             batch_size: Batch size for training data loaders (required)
             test_batch_size: Batch size for test/validation data loaders (required)
             model_name: Hugging Face model name for tokenizer initialization
-            max_length: Max token length (AG News: 128, IMDB: 256-512, DBpedia: 512)
-            dataset: 'ag_news' | 'imdb' | 'dbpedia' (IMDB: stanfordnlp/imdb, DBpedia: fancyzhx/dbpedia_14)
+            max_length: Max token length (AG News: 128, IMDB: 256-512, DBpedia: 512, Yahoo Answers: 256)
+            dataset: 'ag_news' | 'imdb' | 'dbpedia' | 'yahoo_answers'
         """
 
         if batch_size is None or test_batch_size is None:
@@ -111,6 +111,8 @@ class DataManager:
             print("Loading IMDB dataset (stanfordnlp/imdb)...")
         elif self.dataset == "dbpedia":
             print("Loading DBpedia dataset (fancyzhx/dbpedia_14)...")
+        elif self.dataset == "yahoo_answers":
+            print("Loading Yahoo Answers dataset (yassiracharki/Yahoo_Answers_10_categories_for_NLP)...")
         else:
             print("Loading AG News dataset...")
         self._load_data()
@@ -121,6 +123,8 @@ class DataManager:
             self._load_imdb()
         elif self.dataset == "dbpedia":
             self._load_dbpedia()
+        elif self.dataset == "yahoo_answers":
+            self._load_yahoo_answers()
         else:
             self._load_ag_news()
 
@@ -191,6 +195,64 @@ class DataManager:
             print(f"  ⚠️  Using limited size: Train={len(self.train_texts)}, Test={len(self.test_texts)} (test = train_limit × 0.15)")
 
         print(f"  ✅ DBpedia ready! Train: {len(self.train_texts)}, Test: {len(self.test_texts)}")
+
+    def _load_yahoo_answers(self):
+        """Load Yahoo Answers 10-category dataset from Hugging Face (yassiracharki/Yahoo_Answers_10_categories_for_NLP)."""
+        try:
+            from datasets import load_dataset
+        except ImportError:
+            raise ImportError("Yahoo Answers requires datasets library. Install: pip install datasets")
+
+        ds = load_dataset("yassiracharki/Yahoo_Answers_10_categories_for_NLP")
+        train_data = ds["train"]
+        test_data = ds["test"]
+
+        cols = train_data.column_names
+        # Resolve column names (HF may use different casing)
+        def _get_col(candidates):
+            for c in candidates:
+                if c in cols:
+                    return c
+            return None
+        label_col = _get_col(["class_index", "Class Index", "label"]) or cols[0]
+        title_col = _get_col(["question_title", "Question Title"]) or cols[1]
+        content_col = _get_col(["question_content", "Question Content"]) or cols[2]
+        answer_col = _get_col(["best_answer", "Best Answer"]) or (cols[3] if len(cols) > 3 else None)
+
+        def _combine_text(t, c, a):
+            parts = [str(x or "").strip() for x in [t, c, a] if x is not None]
+            return " ".join(p for p in parts if p) or " "
+
+        if answer_col:
+            train_texts = [_combine_text(t, c, a) for t, c, a in zip(train_data[title_col], train_data[content_col], train_data[answer_col])]
+            test_texts = [_combine_text(t, c, a) for t, c, a in zip(test_data[title_col], test_data[content_col], test_data[answer_col])]
+        else:
+            train_texts = [_combine_text(t, c, None) for t, c in zip(train_data[title_col], train_data[content_col])]
+            test_texts = [_combine_text(t, c, None) for t, c in zip(test_data[title_col], test_data[content_col])]
+        train_labels_raw = list(train_data[label_col])
+        test_labels_raw = list(test_data[label_col])
+
+        # Labels are 1-10 in dataset; convert to 0-9 for num_labels=10
+        self.train_texts = train_texts
+        self.train_labels = [int(x) - 1 for x in train_labels_raw]
+        self.test_texts = test_texts
+        self.test_labels = [int(x) - 1 for x in test_labels_raw]
+
+        print(f"  📊 Full Yahoo Answers Dataset: Train={len(self.train_texts)}, Test={len(self.test_texts)}")
+
+        if self.dataset_size_limit is not None and self.dataset_size_limit > 0:
+            rng = np.random.default_rng(42)
+            n_train = min(self.dataset_size_limit, len(self.train_texts))
+            n_test = min(int(self.dataset_size_limit * 0.15), len(self.test_texts))
+            idx_train = rng.choice(len(self.train_texts), n_train, replace=False)
+            idx_test = rng.choice(len(self.test_texts), n_test, replace=False)
+            self.train_texts = [self.train_texts[i] for i in idx_train]
+            self.train_labels = [self.train_labels[i] for i in idx_train]
+            self.test_texts = [self.test_texts[i] for i in idx_test]
+            self.test_labels = [self.test_labels[i] for i in idx_test]
+            print(f"  ⚠️  Using limited size: Train={len(self.train_texts)}, Test={len(self.test_texts)} (test = train_limit × 0.15)")
+
+        print(f"  ✅ Yahoo Answers ready! Train: {len(self.train_texts)}, Test: {len(self.test_texts)}")
 
     def _load_ag_news(self):
         """
