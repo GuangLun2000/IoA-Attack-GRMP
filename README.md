@@ -5,9 +5,7 @@
 ```
 ├── README.md                       # Project documentation (this file)
 ├── requirements.txt                # Dependencies for the project
-├── LICENSE                         # License file
-├── .gitignore                      # Git ignore rules
-├── main.py                         # Main experiment script: configures and runs FL experiments
+├── main.py                         # Main experiment script: configures and runs FL 
 ├── client.py                       # Client logic (BenignClient, AttackerClient/GRMP)
 ├── server.py                       # Server: model aggregation and evaluation
 ├── models.py                       # Learning model definitions (NewsClassifierModel)
@@ -17,12 +15,7 @@
 ├── attack_baseline_gaussian.py     # Gaussian attack baseline (USENIX Security '20)
 ├── attack_baseline_sign_flipping.py# Sign-flipping attack baseline (ICML '18)
 ├── GRMP_Attack_Colab.ipynb         # Google Colab notebook for interactive execution
-├── AG_News_Datasets/               # AG News local data (train.csv, test.csv)
-│   ├── train.csv
-│   └── test.csv
-├── docs/                           # Documentation
-│   └── cosine_similarity_pairwise_migration.md
-└── results/                        # Output directory (figures, CSVs; generated at runtime)
+└── AG_News_Datasets/               # AG News local data (train.csv, test.csv)
 ```
 
 ## Supported Models
