@@ -40,7 +40,7 @@ class Server:
         # Formula 4 constraint parameters (passed to attackers)
         self.dist_bound = dist_bound  # Distance threshold for constraint (4b)
         self.sim_bound_low = None  # Manual lower bound for cosine similarity (None = use benign min)
-        self.sim_bound_up = None   # Manual upper bound for cosine similarity (None = use benign max)
+        self.sim_bound_up = None   # Manual upper bound for cosine similarity (None = use benign mean)
 
         # Track historical data
         self.history = {
