@@ -36,14 +36,6 @@ Configure in `main.py` via `dataset`, `num_labels`, and `max_length`.
 
 **Note on dataset_size_limit**: When `dataset_size_limit` is set, both train and test are limited for faster experimentation: train uses up to `dataset_size_limit` samples, test uses up to `dataset_size_limit × 0.15` samples (same rule for all datasets).
 
-## Dataset Download (AG News)
-
-AG News is loaded from local CSV or downloaded automatically. Manual links:
-```python
-url = "https://www.kaggle.com/datasets/amananandrai/ag-news-classification-dataset"
-train_url = "https://raw.githubusercontent.com/mhjabreel/CharCnn_Keras/master/data/ag_news_csv/train.csv"
-test_url = "https://raw.githubusercontent.com/mhjabreel/CharCnn_Keras/master/data/ag_news_csv/test.csv"
-```
 ## Install Dependencies
 
 ```python
