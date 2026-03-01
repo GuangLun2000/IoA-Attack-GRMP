@@ -15,7 +15,8 @@
 ├── attack_baseline_gaussian.py     # Gaussian attack baseline (USENIX Security '20)
 ├── attack_baseline_sign_flipping.py# Sign-flipping attack baseline (ICML '18)
 ├── GRMP_Attack_Colab.ipynb         # Google Colab notebook for interactive execution
-└── AG_News_Datasets/               # AG News local data (train.csv, test.csv)
+├── AG_News_Datasets/               # AG News local data (train.csv, test.csv)
+└── Yahoo_Answers_Datasets/         # Yahoo Answers local data (created on first run)
 ```
 
 ## Supported Models
@@ -35,6 +36,8 @@ Configure in `main.py` via `model_name`. Use base models (not Instruct) for clas
 Configure in `main.py` via `dataset`, `num_labels`, and `max_length`.
 
 **Note on dataset_size_limit**: When `dataset_size_limit` is set, both train and test are limited for faster experimentation: train uses up to `dataset_size_limit` samples, test uses up to `dataset_size_limit × 0.15` samples (same rule for all datasets).
+
+**Local storage**: AG News and Yahoo Answers can be stored locally. AG News uses `AG_News_Datasets/`; Yahoo Answers uses `Yahoo_Answers_Datasets/`. On first run with Yahoo Answers, the dataset is downloaded from Hugging Face and saved to `Yahoo_Answers_Datasets/` for future use (same behavior as AG News).
 
 ## Install Dependencies
 

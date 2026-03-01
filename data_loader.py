@@ -197,46 +197,70 @@ class DataManager:
         print(f"  ✅ DBpedia ready! Train: {len(self.train_texts)}, Test: {len(self.test_texts)}")
 
     def _load_yahoo_answers(self):
-        """Load Yahoo Answers 10-category dataset from Hugging Face (yassiracharki/Yahoo_Answers_10_categories_for_NLP)."""
-        try:
-            from datasets import load_dataset
-        except ImportError:
-            raise ImportError("Yahoo Answers requires datasets library. Install: pip install datasets")
+        """
+        Load Yahoo Answers 10-category dataset.
+        1. Check Yahoo_Answers_Datasets/ directory first (like AG News).
+        2. If not found, download from Hugging Face and save to local for next time.
+        """
+        data_dir = 'Yahoo_Answers_Datasets'
+        train_file = os.path.join(data_dir, 'train.csv')
+        test_file = os.path.join(data_dir, 'test.csv')
 
-        ds = load_dataset("yassiracharki/Yahoo_Answers_10_categories_for_NLP")
-        train_data = ds["train"]
-        test_data = ds["test"]
-
-        cols = train_data.column_names
-        # Resolve column names (HF may use different casing)
-        def _get_col(candidates):
-            for c in candidates:
-                if c in cols:
-                    return c
-            return None
-        label_col = _get_col(["class_index", "Class Index", "label"]) or cols[0]
-        title_col = _get_col(["question_title", "Question Title"]) or cols[1]
-        content_col = _get_col(["question_content", "Question Content"]) or cols[2]
-        answer_col = _get_col(["best_answer", "Best Answer"]) or (cols[3] if len(cols) > 3 else None)
-
-        def _combine_text(t, c, a):
-            parts = [str(x or "").strip() for x in [t, c, a] if x is not None]
-            return " ".join(p for p in parts if p) or " "
-
-        if answer_col:
-            train_texts = [_combine_text(t, c, a) for t, c, a in zip(train_data[title_col], train_data[content_col], train_data[answer_col])]
-            test_texts = [_combine_text(t, c, a) for t, c, a in zip(test_data[title_col], test_data[content_col], test_data[answer_col])]
+        if os.path.exists(train_file) and os.path.exists(test_file):
+            print(f"  ✅ Found local data files in {data_dir}/ directory. Loading...")
+            train_df = pd.read_csv(train_file, header=None, names=['label', 'text'], quoting=1)
+            test_df = pd.read_csv(test_file, header=None, names=['label', 'text'], quoting=1)
+            self.train_texts = train_df['text'].fillna('').astype(str).tolist()
+            self.train_labels = [(int(x) - 1) for x in train_df['label']]
+            self.test_texts = test_df['text'].fillna('').astype(str).tolist()
+            self.test_labels = [(int(x) - 1) for x in test_df['label']]
         else:
-            train_texts = [_combine_text(t, c, None) for t, c in zip(train_data[title_col], train_data[content_col])]
-            test_texts = [_combine_text(t, c, None) for t, c in zip(test_data[title_col], test_data[content_col])]
-        train_labels_raw = list(train_data[label_col])
-        test_labels_raw = list(test_data[label_col])
+            try:
+                from datasets import load_dataset
+            except ImportError:
+                raise ImportError("Yahoo Answers requires datasets library. Install: pip install datasets")
 
-        # Labels are 1-10 in dataset; convert to 0-9 for num_labels=10
-        self.train_texts = train_texts
-        self.train_labels = [int(x) - 1 for x in train_labels_raw]
-        self.test_texts = test_texts
-        self.test_labels = [int(x) - 1 for x in test_labels_raw]
+            print(f"  🌐 Local data not found. Downloading from Hugging Face...")
+            ds = load_dataset("yassiracharki/Yahoo_Answers_10_categories_for_NLP")
+            train_data = ds["train"]
+            test_data = ds["test"]
+
+            cols = train_data.column_names
+            def _get_col(candidates):
+                for c in candidates:
+                    if c in cols:
+                        return c
+                return None
+            label_col = _get_col(["class_index", "Class Index", "label"]) or cols[0]
+            title_col = _get_col(["question_title", "Question Title"]) or cols[1]
+            content_col = _get_col(["question_content", "Question Content"]) or cols[2]
+            answer_col = _get_col(["best_answer", "Best Answer"]) or (cols[3] if len(cols) > 3 else None)
+
+            def _combine_text(t, c, a):
+                parts = [str(x or "").strip() for x in [t, c, a] if x is not None]
+                return " ".join(p for p in parts if p) or " "
+
+            if answer_col:
+                train_texts = [_combine_text(t, c, a) for t, c, a in zip(train_data[title_col], train_data[content_col], train_data[answer_col])]
+                test_texts = [_combine_text(t, c, a) for t, c, a in zip(test_data[title_col], test_data[content_col], test_data[answer_col])]
+            else:
+                train_texts = [_combine_text(t, c, None) for t, c in zip(train_data[title_col], train_data[content_col])]
+                test_texts = [_combine_text(t, c, None) for t, c in zip(test_data[title_col], test_data[content_col])]
+            train_labels_raw = list(train_data[label_col])
+            test_labels_raw = list(test_data[label_col])
+
+            self.train_texts = train_texts
+            self.train_labels = [int(x) - 1 for x in train_labels_raw]
+            self.test_texts = test_texts
+            self.test_labels = [int(x) - 1 for x in test_labels_raw]
+
+            # Save to local for next time (like AG News)
+            os.makedirs(data_dir, exist_ok=True)
+            train_save = pd.DataFrame({'label': [l + 1 for l in self.train_labels], 'text': self.train_texts})
+            test_save = pd.DataFrame({'label': [l + 1 for l in self.test_labels], 'text': self.test_texts})
+            train_save.to_csv(train_file, index=False, header=False, quoting=1)
+            test_save.to_csv(test_file, index=False, header=False, quoting=1)
+            print(f"  ✅ Saved to {data_dir}/ for future use.")
 
         print(f"  📊 Full Yahoo Answers Dataset: Train={len(self.train_texts)}, Test={len(self.test_texts)}")
 
