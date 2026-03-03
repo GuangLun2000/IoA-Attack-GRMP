@@ -104,6 +104,11 @@ def setup_experiment(config):
             else:
                 client_type = "BENIGN" if client_id < num_benign else "ATTACKER"
                 print(f"    Client {client_id} ({client_type}): 0 samples WARNING: No data assigned!")
+
+        if num_benign < num_clients:
+            print("\n  [Note] Attackers are assigned only data *quantities* (sizes) for the experimental setup. "
+                  "In reality, attackers do NOT perform local training and do NOT use these local data "
+                  "(dataset-free). They also do NOT access other local agents' data.")
     
     else:
         # ========== Non-IID Distribution: Dirichlet-based Partition ==========
@@ -156,6 +161,12 @@ def setup_experiment(config):
             else:
                 client_type = "BENIGN" if client_id < num_benign else "ATTACKER"
                 print(f"    Client {client_id} ({client_type}): 0 samples WARNING: No data assigned!")
+
+        # Clarification: attackers are dataset-free
+        if num_benign < num_clients:
+            print("\n  [Note] Attackers are assigned only data *quantities* (sizes) following the non-IID distribution, "
+                  "for experimental setup. In reality, attackers do NOT perform local training and do NOT use "
+                  "these local data (dataset-free). They also do NOT access other local agents' data.")
 
     # 3. Get global test loader
     test_loader = data_manager.get_test_loader()
