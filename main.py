@@ -776,7 +776,7 @@ def main():
     config = {
         # ========== Experiment Configuration ==========
         'experiment_name': 'vgae_grmp_attack',  # Name for result files and logs
-        'seed': 42,  # Random seed for reproducibility (int), 42 is the default
+        'seed': 42069,  # Random seed for reproducibility (int), 42 is the default
         
         # ========== Federated Learning Setup ==========
         'num_clients': 7,  # Total number of federated learning clients (int)
@@ -840,14 +840,14 @@ def main():
         # # -------------------------------------------
         # Decoder-only (GPT-style): 'gpt2', 'EleutherAI/pythia-160m', 'EleutherAI/pythia-1b', 'facebook/opt-125m', 'Qwen/Qwen2.5-0.5B'
         # 'model_name': 'gpt2',                      # GPT-2 124M — stable decoder baseline
-        'model_name': 'EleutherAI/pythia-160m',    # Pythia-160M (may need grad_clip_norm=0.5)
+        # 'model_name': 'EleutherAI/pythia-160m',    # Pythia-160M (may need grad_clip_norm=0.5)
         # 'model_name': 'facebook/opt-125m',         # OPT-125M (Meta)
-        # 'model_name': 'Qwen/Qwen2.5-0.5B',  # Qwen2.5-0.5B ~494M (Alibaba, LLaMA-style arch, Apache 2.0) — use BASE for fine-tuning
+        'model_name': 'Qwen/Qwen2.5-0.5B',  # Qwen2.5-0.5B ~494M (Alibaba, LLaMA-style arch, Apache 2.0) — use BASE for fine-tuning
         # num_labels and max_length: set above in Dataset Configuration based on chosen dataset
         
 
         # ========== Attack Configuration ==========
-        'attack_method': 'Gaussian',  # Attack method: 'GRMP', 'ALIE', 'SignFlipping', or 'Gaussian' (random model poisoning baseline)
+        'attack_method': 'ALIE',  # Attack method: 'GRMP', 'ALIE', 'SignFlipping', or 'Gaussian' (random model poisoning baseline)
         'attack_start_round': 0,  # Round when attack phase starts (int, now all rounds use complete poisoning)
         
         # ========== ALIE Attack Parameters (only used when attack_method='ALIE') ==========
