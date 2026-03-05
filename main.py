@@ -779,7 +779,7 @@ def main():
         'seed': 42069,  # Random seed for reproducibility (int), 42 is the default
         
         # ========== Federated Learning Setup ==========
-        'num_clients': 7,  # Total number of federated learning clients (int)
+        'num_clients': 5,  # Total number of federated learning clients (int)
         'num_attackers': 0,  # Number of attacker clients (int, must be < num_clients)
         'num_benign_clients': None,  # Optional: Explicit number of benign clients for baseline experiment
                                     # If None, baseline will use (num_clients - num_attackers) to ensure fair comparison
@@ -836,13 +836,13 @@ def main():
         # Model configuration
         # Supported models:
         # Encoder-only (BERT-style): 'distilbert-base-uncased', 'bert-base-uncased', 'roberta-base', 'microsoft/deberta-v3-base'
-        # 'model_name': 'distilbert-base-uncased',  # distilbert 67M
+        'model_name': 'distilbert-base-uncased',  # distilbert 67M
         # # -------------------------------------------
         # Decoder-only (GPT-style): 'gpt2', 'EleutherAI/pythia-160m', 'EleutherAI/pythia-1b', 'facebook/opt-125m', 'Qwen/Qwen2.5-0.5B'
         # 'model_name': 'gpt2',                      # GPT-2 124M — stable decoder baseline
         # 'model_name': 'EleutherAI/pythia-160m',    # Pythia-160M (may need grad_clip_norm=0.5)
         # 'model_name': 'facebook/opt-125m',         # OPT-125M (Meta)
-        'model_name': 'Qwen/Qwen2.5-0.5B',  # Qwen2.5-0.5B ~494M (Alibaba, LLaMA-style arch, Apache 2.0) — use BASE for fine-tuning
+        # 'model_name': 'Qwen/Qwen2.5-0.5B',  # Qwen2.5-0.5B ~494M (Alibaba, LLaMA-style arch, Apache 2.0) — use BASE for fine-tuning
         # num_labels and max_length: set above in Dataset Configuration based on chosen dataset
         
 
