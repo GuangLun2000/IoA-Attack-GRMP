@@ -776,11 +776,11 @@ def main():
     config = {
         # ========== Experiment Configuration ==========
         'experiment_name': 'vgae_grmp_attack',  # Name for result files and logs
-        'seed': 42069,  # Random seed for reproducibility (int), 42 is the default
+        'seed': 42,  # Random seed for reproducibility (int), 42 is the default
         
         # ========== Federated Learning Setup ==========
-        'num_clients': 5,  # Total number of federated learning clients (int)
-        'num_attackers': 0,  # Number of attacker clients (int, must be < num_clients)
+        'num_clients': 7,  # Total number of federated learning clients (int)
+        'num_attackers': 2,  # Number of attacker clients (int, must be < num_clients)
         'num_benign_clients': None,  # Optional: Explicit number of benign clients for baseline experiment
                                     # If None, baseline will use (num_clients - num_attackers) to ensure fair comparison
                                     # If set, baseline experiment will use exactly this many benign clients
@@ -791,7 +791,7 @@ def main():
         'server_lr': 1.0,  # Server learning rate for model aggregation (fixed at 1.0)
         'batch_size': 128,  # Batch size for local training (int)
         'test_batch_size': 512,  # Batch size for test/validation data loaders (int)
-        'local_epochs': 2,  # Number of local training epochs per round (int, per paper Section IV)
+        'local_epochs': 5,  # Number of local training epochs per round (int, per paper Section IV)
         'grad_clip_norm': 1.0,  # Benign client grad clipping. Decoder models: Pythia-160m try 0.5 if nan; Qwen2.5-0.5B typically stable at 1.0
         'alpha': 0.0,  # FedProx proximal coefficient μ: loss += (μ/2)*||w - w_global||². Set 0 for standard FedAvg, >0 to penalize local drift from global model (helps Non-IID stability)
         
@@ -828,8 +828,8 @@ def main():
         # LoRA parameters (only used when use_lora=True)
         # NOTE: Lower r values = faster training but potentially less capacity
         # Recommended: r=8 for speed, r=16 for better performance (default)
-        'lora_r': 8,  # LoRA rank (controls the rank of low-rank matrices) - REDUCED from 16 to 8 for speed
-        'lora_alpha': 16,  # LoRA alpha (scaling factor, typically 2*r) - UPDATED to match r=8
+        'lora_r': 16,  # LoRA rank (controls the rank of low-rank matrices) - REDUCED from 16 to 8 for speed
+        'lora_alpha': 32,  # LoRA alpha (scaling factor, typically 2*r) - UPDATED to match r=8
         'lora_dropout': 0.1,  # LoRA dropout rate
         'lora_target_modules': None,  # None = use default for DistilBERT (["q_lin", "k_lin", "v_lin", "out_lin"])
         
@@ -847,7 +847,7 @@ def main():
         
 
         # ========== Attack Configuration ==========
-        'attack_method': 'ALIE',  # Attack method: 'GRMP', 'ALIE', 'SignFlipping', or 'Gaussian' (random model poisoning baseline)
+        'attack_method': 'GRMP',  # Attack method: 'GRMP', 'ALIE', 'SignFlipping', or 'Gaussian' (random model poisoning baseline)
         'attack_start_round': 0,  # Round when attack phase starts (int, now all rounds use complete poisoning)
         
         # ========== ALIE Attack Parameters (only used when attack_method='ALIE') ==========
@@ -863,7 +863,7 @@ def main():
         # ========== VGAE Training Parameters ==========
         # Reference paper: input_dim=5, hidden1_dim=32, hidden2_dim=16, num_epoch=10, lr=0.01
         # Note: dim_reduction_size should be <= total trainable parameters
-        'dim_reduction_size': 500,  # Reduced dimensionality of LLM parameters (auto-adjusted for LoRA if needed)
+        'dim_reduction_size': 1000,  # Reduced dimensionality of LLM parameters (auto-adjusted for LoRA if needed)
         'vgae_epochs': 20,  # Number of epochs for VGAE training (reference: 20)
         'vgae_lr': 0.01,  # Learning rate for VGAE optimizer (reference: 0.01)
         'vgae_hidden_dim': 64,  # VGAE hidden layer dimension (per paper: hidden1_dim=32)
