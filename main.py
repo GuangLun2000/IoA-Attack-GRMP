@@ -824,12 +824,12 @@ def main():
         'dataset_size_limit': 20000,  # Limit for faster experimentation. When set: train ≤ limit, test ≤ limit × 0.15 (same rule for all datasets)
 
         # ========== Training Mode Configuration ==========
-        'use_lora': False,  # True for LoRA fine-tuning, False for full fine-tuning
+        'use_lora': True,  # True for LoRA fine-tuning, False for full fine-tuning
         # LoRA parameters (only used when use_lora=True)
         # NOTE: Lower r values = faster training but potentially less capacity
         # Recommended: r=8 for speed, r=16 for better performance (default)
-        'lora_r': 8,  # LoRA rank (controls the rank of low-rank matrices) - REDUCED from 16 to 8 for speed
-        'lora_alpha': 16,  # LoRA alpha (scaling factor, typically 2*r) - UPDATED to match r=8
+        'lora_r': 128,  # LoRA rank (controls the rank of low-rank matrices) - REDUCED from 16 to 8 for speed
+        'lora_alpha': 256,  # LoRA alpha (scaling factor, typically 2*r) - UPDATED to match r=8
         'lora_dropout': 0.1,  # LoRA dropout rate
         'lora_target_modules': None,  # None = use default for DistilBERT (["q_lin", "k_lin", "v_lin", "out_lin"])
         
