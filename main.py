@@ -828,8 +828,8 @@ def main():
         # LoRA parameters (only used when use_lora=True)
         # NOTE: Lower r values = faster training but potentially less capacity
         # Recommended: r=8 for speed, r=16 for better performance (default)
-        'lora_r': 32,  # LoRA rank (controls the rank of low-rank matrices) - REDUCED from 16 to 8 for speed
-        'lora_alpha': 64,  # LoRA alpha (scaling factor, typically 2*r) - UPDATED to match r=8
+        'lora_r': 32,  # LoRA rank (controls the rank of low-rank matrices). r=8 for speed, r=16/32 for better capacity
+        'lora_alpha': 64,  # LoRA alpha (scaling factor, typically 2*r). Must match r: alpha=2*r
         'lora_dropout': 0.1,  # LoRA dropout rate
         'lora_target_modules': None,  # None = use default for DistilBERT (["q_lin", "k_lin", "v_lin", "out_lin"])
         
