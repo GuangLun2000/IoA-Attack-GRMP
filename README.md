@@ -6,10 +6,15 @@
 ├── README.md                       # Project documentation (this file)
 ├── requirements.txt                # Dependencies for the project
 ├── main.py                         # Main experiment script: configures and runs FL 
+├── fed_checkpoint.py               # Save global NewsClassifierModel after FL (optional)
+├── decoder_adapters.py             # Pluggable SeqCLS → CausalLM backbone transfer
+├── run_downstream_generation.py    # CLI: load Fed checkpoint, generate on probe JSON
 ├── client.py                       # Client logic (BenignClient, AttackerClient/GRMP)
 ├── server.py                       # Server: model aggregation and evaluation
 ├── models.py                       # Learning model definitions (NewsClassifierModel)
 ├── data_loader.py                  # Data loading (AG News, IMDB, DBpedia, Yahoo Answers)
+├── data/financial_probes.json      # 10 finance-style probes (news + question) for downstream gen
+├── scripts/sample_ag_business_probes.py  # Optional: sample 10 AG News Business rows into JSON
 ├── visualization.py                # Visualization module: generates figures
 ├── attack_baseline_alie.py         # ALIE attack baseline (NeurIPS '19)
 ├── attack_baseline_gaussian.py     # Gaussian attack baseline (USENIX Security '20)
@@ -52,6 +57,60 @@ Configure in `main.py` via `dataset`, `num_labels`, and `max_length`.
 ```bash
 python main.py
 ```
+
+### Save global model checkpoint (for downstream experiments)
+
+After federated training, you can persist `server.global_model` (same `NewsClassifierModel` as during FL).
+
+1. In `main.py` → `config`, set:
+   - `save_global_checkpoint`: `True`
+   - `global_checkpoint_subdir`: optional subfolder under `results/` (default: `global_checkpoint`). Use a unique name per run if multiple experiments share `results/`.
+2. Re-run `python main.py`. Outputs:
+   - `results/<global_checkpoint_subdir>/global_model.pt` — `state_dict` + embedded `metadata`
+   - `results/<global_checkpoint_subdir>/checkpoint_metadata.json` — `model_name`, `num_labels`, `use_lora`, LoRA hyperparameters if applicable
+   - If `use_lora=True`: `results/<global_checkpoint_subdir>/peft_adapter/` — PEFT `save_pretrained` (best-effort)
+
+**Pythia-160m FedLLM example:** set `model_name` to `EleutherAI/pythia-160m`, matching `num_labels` / `dataset`, then enable `save_global_checkpoint` as above.
+
+### Downstream causal generation (probe JSON)
+
+Second-stage script loads the Fed **sequence-classification** checkpoint, copies **GPT-NeoX / Pythia `gpt_neox.*`** weights into **`AutoModelForCausalLM`** (same HF id), keeps the **pretrained `lm_head`**, and runs `generate()` on a fixed probe list (no extra training set).
+
+Default probes: [`data/financial_probes.json`](data/financial_probes.json) — ten English finance-themed snippets plus the same instruction (synthetic-style text; **not** sampled from AG News). To use **AG News Business** lines instead, run:
+
+```bash
+python scripts/sample_ag_business_probes.py --csv AG_News_Datasets/train.csv -o data/financial_probes_ag.json
+```
+
+(AG CSV labels: `3` = Business.)
+
+**Single checkpoint:**
+
+```bash
+python run_downstream_generation.py \
+  --checkpoint results/global_checkpoint \
+  --probes data/financial_probes.json \
+  --output results/downstream_gen.jsonl \
+  --max-new-tokens 128
+```
+
+**Paired clean vs poisoned** (same probes, two checkpoints):
+
+```bash
+python run_downstream_generation.py \
+  --checkpoint results/global_checkpoint \
+  --compare-checkpoint results_baseline/global_checkpoint \
+  --probes data/financial_probes.json \
+  --output results/downstream_compare.jsonl
+```
+
+JSONL fields: `probe_id`, `news_text`, `question`, `completion_primary`; with `--compare-checkpoint`, also `completion_compare`. Use `--greedy` for greedy decoding; `--base-model` overrides the HF id for CausalLM/tokenizer (only if it matches the saved architecture).
+
+### Adding another decoder family
+
+1. Subclass `DecoderAdapter` in [`decoder_adapters.py`](decoder_adapters.py) and implement `matches(model_name)` and `transfer_backbone(seq_cls_inner, causal_lm)`.
+2. Append the class to `ADAPTER_REGISTRY` (list order = match priority).
+3. Run `run_downstream_generation.py` with checkpoints trained on that `model_name`.
 
 ### Google Colab Execution
 
