@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, Type
+from typing import List, Type
 
 import torch.nn as nn
 
@@ -64,8 +64,40 @@ class PythiaNeoXAdapter(DecoderAdapter):
         causal_lm.load_state_dict(to_load, strict=False)
 
 
+class Qwen2Adapter(DecoderAdapter):
+    """Qwen2 / Qwen2.5 sequence-classification -> causal LM (shared ``model.*`` backbone)."""
+
+    @staticmethod
+    def matches(model_name: str) -> bool:
+        m = (model_name or "").lower()
+        return "qwen2" in m
+
+    def transfer_backbone(self, seq_cls_inner: nn.Module, causal_lm: nn.Module) -> None:
+        inner = seq_cls_inner
+        if hasattr(inner, "merge_and_unload"):
+            inner = inner.merge_and_unload()
+
+        src_sd = inner.state_dict()
+        dst_sd = causal_lm.state_dict()
+        to_load = {}
+        for k, v in src_sd.items():
+            if not k.startswith("model."):
+                continue
+            if k not in dst_sd or dst_sd[k].shape != v.shape:
+                continue
+            to_load[k] = v.to(device=dst_sd[k].device, dtype=dst_sd[k].dtype)
+
+        if not to_load:
+            raise RuntimeError(
+                "Qwen2Adapter: no model.* keys matched between SeqCLS and CausalLM. "
+                "Check model_name and transformers versions."
+            )
+        causal_lm.load_state_dict(to_load, strict=False)
+
+
 # Registry: first match wins (order matters for overlapping patterns).
 ADAPTER_REGISTRY: List[Type[DecoderAdapter]] = [
+    Qwen2Adapter,
     PythiaNeoXAdapter,
 ]
 

@@ -5,8 +5,9 @@ Load a FedLLM SeqCLS checkpoint (NewsClassifierModel), transfer backbone to Caus
 Example:
   python run_downstream_generation.py \\
     --checkpoint results/global_checkpoint \\
-    --probes data/financial_probes.json \\
-    --output results/downstream_gen.jsonl
+    --probes data/ag_news_simple_probes.json \\
+    --output results/downstream_gen.jsonl \\
+    --stable --write-seq-cls-argmax
 
   python run_downstream_generation.py \\
     --checkpoint results/global_checkpoint \\
@@ -20,13 +21,20 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from decoder_adapters import resolve_adapter
 from models import NewsClassifierModel
+
+DEFAULT_MAX_NEW_TOKENS = 128
+# Under --stable: enough for one AG News class label + one concise explanation (~20 words)
+STABLE_MAX_NEW_TOKENS = 64
+STABLE_REPETITION_PENALTY = 1.1
+
+AG_NEWS_ID2LABEL_FALLBACK = {0: "World", 1: "Sports", 2: "Business", 3: "Sci/Tech"}
 
 
 def _torch_load(path: Path) -> Any:
@@ -100,12 +108,81 @@ def default_prompt(news_text: str, question: str) -> str:
     return f"### News\n{news_text}\n\n### Task\n{question}\n\n### Answer\n"
 
 
+def simple_prompt(news_text: str, question: str) -> str:
+    """Shorter template aligned with easy AG News-style probes."""
+    return f"News: {news_text}\n{question}\nAnswer:"
+
+
+def make_prompt_fn(style: str) -> Callable[[str, str], str]:
+    if style == "simple":
+        return simple_prompt
+    if style == "default":
+        return default_prompt
+    raise ValueError(f"Unknown prompt style: {style!r} (use 'default' or 'simple')")
+
+
 def load_probes(path: Path) -> List[Dict[str, Any]]:
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
     if not isinstance(data, list):
         raise ValueError("Probes JSON must be a list of objects with id, news_text, question")
     return data
+
+
+def _classifier_config_from_news(news: NewsClassifierModel):
+    """Resolve HuggingFace PretrainedConfig for id2label (handles PEFT wrapper)."""
+    m = news.model
+    cfg = getattr(m, "config", None)
+    if cfg is not None and getattr(cfg, "id2label", None):
+        return cfg
+    base = getattr(m, "base_model", None)
+    if base is not None:
+        inner = getattr(base, "model", base)
+        cfg = getattr(inner, "config", None)
+        if cfg is not None:
+            return cfg
+    return cfg
+
+
+def get_id2label_map(news: NewsClassifierModel, num_labels: int) -> Dict[int, str]:
+    cfg = _classifier_config_from_news(news)
+    if cfg is not None and getattr(cfg, "id2label", None):
+        return {int(k): str(v) for k, v in cfg.id2label.items()}
+    if num_labels == 4:
+        return dict(AG_NEWS_ID2LABEL_FALLBACK)
+    return {i: str(i) for i in range(num_labels)}
+
+
+def seq_cls_argmax_one(
+    news: NewsClassifierModel,
+    tokenizer,
+    text: str,
+    id2label: Dict[int, str],
+    max_length: int = 512,
+) -> Tuple[int, str]:
+    enc = tokenizer(text, return_tensors="pt", truncation=True, max_length=max_length)
+    dev = next(news.parameters()).device
+    enc = {k: v.to(dev) for k, v in enc.items()}
+    with torch.no_grad():
+        logits = news(enc["input_ids"], enc["attention_mask"])
+    pid = int(logits.argmax(dim=-1).item())
+    label = id2label.get(pid, str(pid))
+    return pid, label
+
+
+def collect_seq_cls_predictions(
+    news: NewsClassifierModel,
+    tokenizer,
+    probes: List[Dict[str, Any]],
+    num_labels: int,
+    max_length: int = 512,
+) -> List[Tuple[int, str]]:
+    id2label = get_id2label_map(news, num_labels)
+    out: List[Tuple[int, str]] = []
+    for p in probes:
+        pid, lab = seq_cls_argmax_one(news, tokenizer, p["news_text"], id2label, max_length=max_length)
+        out.append((pid, lab))
+    return out
 
 
 def generate_completion(
@@ -116,6 +193,7 @@ def generate_completion(
     max_new_tokens: int,
     do_sample: bool,
     temperature: float,
+    repetition_penalty: Optional[float] = None,
 ) -> str:
     inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048)
     inputs = {k: v.to(device) for k, v in inputs.items()}
@@ -132,6 +210,8 @@ def generate_completion(
         gen_kw["temperature"] = max(temperature, 1e-5)
     else:
         gen_kw["do_sample"] = False
+    if repetition_penalty is not None and repetition_penalty > 0:
+        gen_kw["repetition_penalty"] = repetition_penalty
 
     with torch.no_grad():
         out = causal.generate(**inputs, **gen_kw)
@@ -146,10 +226,11 @@ def run_for_checkpoint(
     base_model_name: str,
     probes: List[Dict[str, Any]],
     device: torch.device,
-    prompt_fn,
+    prompt_fn: Callable[[str, str], str],
     max_new_tokens: int,
     do_sample: bool,
     temperature: float,
+    repetition_penalty: Optional[float] = None,
 ) -> List[str]:
     adapter = resolve_adapter(meta["model_name"])
     causal = build_causal_lm(base_model_name, device)
@@ -160,7 +241,14 @@ def run_for_checkpoint(
     for p in probes:
         prompt = prompt_fn(p["news_text"], p["question"])
         text = generate_completion(
-            causal, tokenizer, prompt, device, max_new_tokens, do_sample, temperature
+            causal,
+            tokenizer,
+            prompt,
+            device,
+            max_new_tokens,
+            do_sample,
+            temperature,
+            repetition_penalty=repetition_penalty,
         )
         completions.append(text)
     del causal
@@ -197,9 +285,43 @@ def main() -> None:
         help="Override HF model id for CausalLM/tokenizer (default: model_name from checkpoint metadata)",
     )
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--max-new-tokens", type=int, default=128)
+    parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=None,
+        help=f"Max new tokens (default: {DEFAULT_MAX_NEW_TOKENS}, or {STABLE_MAX_NEW_TOKENS} when --stable)",
+    )
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--greedy", action="store_true", help="Disable sampling (greedy decode)")
+    parser.add_argument(
+        "--stable",
+        action="store_true",
+        help="Greedy decode + short generations + repetition_penalty (recommended for short label-style answers)",
+    )
+    parser.add_argument(
+        "--repetition-penalty",
+        type=float,
+        default=None,
+        help="Passed to generate(); when --stable and omitted, uses %.2f" % STABLE_REPETITION_PENALTY,
+    )
+    parser.add_argument(
+        "--prompt-style",
+        type=str,
+        choices=("default", "simple"),
+        default="default",
+        help="Prompt template: 'simple' uses a short News/Answer format (easier for small LMs)",
+    )
+    parser.add_argument(
+        "--write-seq-cls-argmax",
+        action="store_true",
+        help="Add seq_cls_label_id / seq_cls_label from the SeqCLS head (stable vs free generation)",
+    )
+    parser.add_argument(
+        "--cls-max-length",
+        type=int,
+        default=512,
+        help="Tokenizer max_length for --write-seq-cls-argmax",
+    )
     args = parser.parse_args()
 
     device = torch.device(args.device)
@@ -218,9 +340,31 @@ def main() -> None:
         )
 
     do_sample = not args.greedy
+    repetition_penalty: Optional[float] = args.repetition_penalty
 
-    def prompt_fn(news_text: str, question: str) -> str:
-        return default_prompt(news_text, question)
+    if args.max_new_tokens is not None:
+        max_new_tokens = args.max_new_tokens
+    elif args.stable:
+        max_new_tokens = STABLE_MAX_NEW_TOKENS
+    else:
+        max_new_tokens = DEFAULT_MAX_NEW_TOKENS
+
+    if args.stable:
+        do_sample = False
+        if repetition_penalty is None:
+            repetition_penalty = STABLE_REPETITION_PENALTY
+
+    prompt_fn = make_prompt_fn(args.prompt_style)
+    tokenizer_shared = build_tokenizer(base_name)
+
+    seq_primary: Optional[List[Tuple[int, str]]] = None
+    seq_compare: Optional[List[Tuple[int, str]]] = None
+    if args.write_seq_cls_argmax:
+        nlab = int(meta_a["num_labels"])
+        seq_primary = collect_seq_cls_predictions(
+            news_a, tokenizer_shared, probes, nlab, max_length=args.cls_max_length
+        )
+        print(f"  SeqCLS argmax predictions (primary): {len(seq_primary)} probes")
 
     print(f"  Primary checkpoint: {pt_path}")
     completions_a = run_for_checkpoint(
@@ -230,24 +374,33 @@ def main() -> None:
         probes,
         device,
         prompt_fn,
-        args.max_new_tokens,
+        max_new_tokens,
         do_sample,
         args.temperature,
+        repetition_penalty=repetition_penalty,
     )
 
     completions_b: Optional[List[str]] = None
+    news_b = None
+    meta_b = None
     if args.compare_checkpoint:
-        pt_b, meta_b = resolve_checkpoint_paths(args.compare_checkpoint)
+        pt_b, meta_b_path = resolve_checkpoint_paths(args.compare_checkpoint)
         if not pt_b.is_file():
             print(f"Compare checkpoint not found: {pt_b}", file=sys.stderr)
             sys.exit(1)
-        news_b, meta_b = load_news_classifier(pt_b, meta_b)
+        news_b, meta_b = load_news_classifier(pt_b, meta_b_path)
         if meta_b["model_name"] != meta_a["model_name"]:
             print(
                 "  Warning: compare checkpoint has different model_name than primary; "
                 "verify adapters and base-model compatibility.",
                 file=sys.stderr,
             )
+        if args.write_seq_cls_argmax:
+            nlab_b = int(meta_b["num_labels"])
+            seq_compare = collect_seq_cls_predictions(
+                news_b, tokenizer_shared, probes, nlab_b, max_length=args.cls_max_length
+            )
+            print(f"  SeqCLS argmax predictions (compare): {len(seq_compare)} probes")
         print(f"  Compare checkpoint: {pt_b}")
         completions_b = run_for_checkpoint(
             news_b,
@@ -256,22 +409,30 @@ def main() -> None:
             probes,
             device,
             prompt_fn,
-            args.max_new_tokens,
+            max_new_tokens,
             do_sample,
             args.temperature,
+            repetition_penalty=repetition_penalty,
         )
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with open(args.output, "w", encoding="utf-8") as out_f:
         for i, p in enumerate(probes):
-            row = {
+            row: Dict[str, Any] = {
                 "probe_id": p.get("id", i + 1),
                 "news_text": p["news_text"],
                 "question": p["question"],
+                "prompt_style": args.prompt_style,
                 "completion_primary": completions_a[i],
             }
             if completions_b is not None:
                 row["completion_compare"] = completions_b[i]
+            if seq_primary is not None:
+                row["seq_cls_label_id"] = seq_primary[i][0]
+                row["seq_cls_label"] = seq_primary[i][1]
+            if seq_compare is not None:
+                row["seq_cls_compare_label_id"] = seq_compare[i][0]
+                row["seq_cls_compare_label"] = seq_compare[i][1]
             out_f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     print(f"  Wrote {len(probes)} lines to {args.output}")
