@@ -855,7 +855,7 @@ def main(config_overrides: Optional[Dict] = None):
         'num_benign_clients': None,  # Optional: Explicit number of benign clients for baseline experiment
                                     # If None, baseline will use (num_clients - num_attackers) to ensure fair comparison
                                     # If set, baseline experiment will use exactly this many benign clients
-        'num_rounds': 20,  # Total number of federated learning rounds (int)
+        'num_rounds': 10,  # Total number of federated learning rounds (int)
         
         # ========== Training Hyperparameters ==========
         'client_lr': 5e-5,  # Learning rate for local client training (float)
@@ -1002,12 +1002,11 @@ def main(config_overrides: Optional[Dict] = None):
         'downstream_probes': 'data/ag_news_curated_10.json',  # Probe JSON path (relative to repo root / cwd)
         'downstream_output': None,  # None -> results/<experiment_name>_downstream_gen.jsonl; else path (relative to results/ if not absolute)
         'downstream_device': None,  # None -> cuda if available else cpu
-        # Extra CLI tokens for run_downstream_generation.py (e.g. --stable, --parse-retry-max 2)
+        # Extra CLI tokens for run_downstream_generation.py (e.g. --stable; --parse-retry-max needs --parse-strict-output)
         'downstream_cli_args': [
             '--stable',
             '--write-seq-cls-argmax',
             '--prompt-style', 'strict',
-            '--parse-strict-output',
         ],
 
     }

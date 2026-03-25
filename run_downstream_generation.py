@@ -13,13 +13,13 @@ Example:
     --checkpoint results/global_checkpoint \\
     --probes data/ag_news_curated_10.json \\
     --output results/downstream_curated.jsonl \\
-    --prompt-style strict --stable --write-seq-cls-argmax --parse-strict-output
+    --prompt-style strict --stable --write-seq-cls-argmax
 
   python run_downstream_generation.py \\
     --checkpoint results/global_checkpoint \\
     --probes data/ag_news_curated_10.json \\
     --output results/downstream_twostage.jsonl \\
-    --prompt-style strict --stable --write-seq-cls-argmax --parse-strict-output \\
+    --prompt-style strict --stable --write-seq-cls-argmax \\
     --strict-two-stage
 
   python run_downstream_generation.py \\
@@ -47,14 +47,14 @@ DEFAULT_MAX_NEW_TOKENS = 128
 # Under --stable: enough for one AG News class label + one concise explanation (~20 words)
 STABLE_MAX_NEW_TOKENS = 64
 STABLE_REPETITION_PENALTY = 1.1
-# Under --stable with --prompt-style strict: two-line Category + Reason + stopping criteria
+# Under --stable with --prompt-style strict: Category + Reason style; decode until max_new_tokens or EOS
 STABLE_MAX_NEW_TOKENS_STRICT = 72
 STABLE_REPETITION_PENALTY_STRICT = 1.15
-# strict_json: compact JSON object
+# strict_json: JSON-style completion; decode until max_new_tokens or EOS
 STABLE_MAX_NEW_TOKENS_STRICT_JSON = 96
 
 AG_NEWS_ID2LABEL_FALLBACK = {0: "World", 1: "Sports", 2: "Business", 3: "Sci/Tech"}
-# Prompt ends with this; completion is stored as prefix + model continuation (full two-line answer).
+# Prompt ends with this; completion is prefix + model continuation.
 STRICT_COMPLETION_PREFIX = "Category: "
 STRICT_REASON_MAX_WORDS = 25
 STRICT_PHASE_A_MAX_NEW_TOKENS = 16
@@ -76,38 +76,6 @@ _STRICT_LINE1_ANCHOR = re.compile(
 )
 _STRICT_LINE2_ANCHOR = re.compile(r"^Reason:\s*(.+)$", re.IGNORECASE)
 _JSON_CATEGORY_KEYS = ("category", "label", "class")
-
-
-class _StopAfterTwoLines(StoppingCriteria):
-    """Stop once generated text has at least two lines (Category + Reason)."""
-
-    def __init__(self, tokenizer: Any, prompt_token_len: int) -> None:
-        self.tokenizer = tokenizer
-        self.prompt_len = int(prompt_token_len)
-
-    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
-        seq = input_ids[0]
-        gen_only = seq[self.prompt_len :]
-        if gen_only.numel() == 0:
-            return False
-        text = self.tokenizer.decode(gen_only, skip_special_tokens=True)
-        return len(text.splitlines()) >= 2
-
-
-class _StopAfterJsonBrace(StoppingCriteria):
-    """Stop after first closing brace in generated text (best-effort for one JSON object)."""
-
-    def __init__(self, tokenizer: Any, prompt_token_len: int) -> None:
-        self.tokenizer = tokenizer
-        self.prompt_len = int(prompt_token_len)
-
-    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
-        seq = input_ids[0]
-        gen_only = seq[self.prompt_len :]
-        if gen_only.numel() == 0:
-            return False
-        text = self.tokenizer.decode(gen_only, skip_special_tokens=True)
-        return "}" in text
 
 
 class _StopAfterFirstNewline(StoppingCriteria):
@@ -396,6 +364,10 @@ def load_probes(path: Path) -> List[Dict[str, Any]]:
             raise ValueError(f"Probe at index {i} must be an object with 'news_text'")
         if "question" not in item:
             item["question"] = ""
+        if "ag_news_label_id" not in item and "gold_ag_label" in item:
+            item["ag_news_label_id"] = item["gold_ag_label"]
+        if "ag_news_category" not in item and "gold_category" in item:
+            item["ag_news_category"] = item["gold_category"]
     return data
 
 
@@ -586,14 +558,6 @@ def _generate_single_pass_one(
     repetition_penalty: Optional[float],
 ) -> str:
     prompt = prompt_fn(news_text, question)
-    inp = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048)
-    plen = int(inp["input_ids"].shape[1])
-    stopping: Optional[StoppingCriteriaList] = None
-    if prompt_style == "strict" and prompt.endswith(STRICT_COMPLETION_PREFIX):
-        stopping = StoppingCriteriaList([_StopAfterTwoLines(tokenizer, plen)])
-    elif prompt_style == "strict_json":
-        stopping = StoppingCriteriaList([_StopAfterJsonBrace(tokenizer, plen)])
-
     raw = generate_completion(
         causal,
         tokenizer,
@@ -603,7 +567,7 @@ def _generate_single_pass_one(
         do_sample,
         temperature,
         repetition_penalty=repetition_penalty,
-        stopping_criteria=stopping,
+        stopping_criteria=None,
     )
     if prompt_style == "strict" and prompt.endswith(STRICT_COMPLETION_PREFIX):
         return (STRICT_COMPLETION_PREFIX + raw.strip()).strip()
@@ -791,21 +755,21 @@ def main() -> None:
     parser.add_argument(
         "--parse-strict-output",
         action="store_true",
-        help="Parse completion: strict lines or JSON; adds parsed_*, format_valid, format_valid_strict, matches_gold_*",
+        help="Best-effort parse of strict / strict_json / two-stage text; adds parsed_category, parsed_reason to JSONL only",
     )
     parser.add_argument(
         "--parse-retry-max",
         type=int,
         default=0,
         help=(
-            "Extra decode attempts when parse fails (strict/strict_json/two-stage only). "
+            "With --parse-strict-output: extra decodes when parse fails (strict/strict_json/two-stage only). "
             "0 = single generation; 2 = up to 3 total attempts. Retries use sampling + --parse-retry-temperature."
         ),
     )
     parser.add_argument(
         "--parse-retry-lenient",
         action="store_true",
-        help="Stop retrying on format_valid instead of format_valid_strict (looser).",
+        help="With --parse-strict-output: stop retrying on lenient parse success instead of strict (looser).",
     )
     parser.add_argument(
         "--parse-retry-temperature",
@@ -894,9 +858,10 @@ def main() -> None:
             "  Warning: --parse-retry-max ignored unless --prompt-style strict|strict_json or --strict-two-stage.",
             file=sys.stderr,
         )
+    effective_parse_retries = args.parse_retry_max if args.parse_strict_output else 0
     if args.parse_retry_max > 0 and not args.parse_strict_output:
         print(
-            "  Note: --parse-retry-max uses internal parsing; add --parse-strict-output to log parsed fields in JSONL.",
+            "  Warning: --parse-retry-max ignored unless --parse-strict-output (retries are driven by parse success).",
             file=sys.stderr,
         )
 
@@ -917,7 +882,7 @@ def main() -> None:
         reason_only=args.reason_only,
         seq_primary=seq_primary,
         num_labels=int(meta_a["num_labels"]),
-        parse_extra_retries=max(0, args.parse_retry_max),
+        parse_extra_retries=max(0, effective_parse_retries),
         retry_parse_lenient=args.parse_retry_lenient,
         retry_temperature=max(args.parse_retry_temperature, 1e-5),
     )
@@ -961,7 +926,7 @@ def main() -> None:
             reason_only=args.reason_only,
             seq_primary=seq_compare,
             num_labels=int(meta_b["num_labels"]),
-            parse_extra_retries=max(0, args.parse_retry_max),
+            parse_extra_retries=max(0, effective_parse_retries),
             retry_parse_lenient=args.parse_retry_lenient,
             retry_temperature=max(args.parse_retry_temperature, 1e-5),
         )
@@ -976,26 +941,19 @@ def main() -> None:
                 "prompt_style": args.prompt_style,
                 "completion_primary": completions_a[i],
             }
-            if "gold_ag_label" in p:
-                row["gold_ag_label"] = p["gold_ag_label"]
-            if "gold_category" in p:
-                row["gold_category"] = p["gold_category"]
+            if "ag_news_label_id" in p:
+                row["ag_news_label_id"] = p["ag_news_label_id"]
+            if "ag_news_category" in p:
+                row["ag_news_category"] = p["ag_news_category"]
             if retry_meta_a[i]:
                 row.update(retry_meta_a[i])
             if args.parse_strict_output:
                 if args.prompt_style == "strict_json" and not args.strict_two_stage:
-                    pc, pr, fv, fvs = parse_strict_json_completion(completions_a[i])
+                    pc, pr, _, _ = parse_strict_json_completion(completions_a[i])
                 else:
-                    pc, pr, fv, fvs = parse_strict_completion(completions_a[i])
+                    pc, pr, _, _ = parse_strict_completion(completions_a[i])
                 row["parsed_category"] = pc
                 row["parsed_reason"] = pr
-                row["format_valid"] = fv
-                row["format_valid_strict"] = fvs
-                if p.get("gold_category") is not None:
-                    row["matches_gold_category"] = bool(fv and pc is not None and pc == p["gold_category"])
-                    row["matches_gold_category_strict"] = bool(
-                        fvs and pc is not None and pc == p["gold_category"]
-                    )
             if completions_b is not None:
                 row["completion_compare"] = completions_b[i]
                 if i < len(retry_meta_b) and retry_meta_b[i]:

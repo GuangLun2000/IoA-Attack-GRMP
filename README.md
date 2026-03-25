@@ -15,7 +15,7 @@
 ├── data_loader.py                  # Data loading (AG News, IMDB, DBpedia, Yahoo Answers)
 ├── data/financial_probes.json      # 10 finance-style probes (news + question) for downstream gen
 ├── data/ag_news_simple_probes.json # 10 short probes: AG News 4-class label + concise explanation (downstream)
-├── data/ag_news_curated_10.json    # 10 real AG News rows (title+text), gold_ag_label / gold_category for eval
+├── data/ag_news_curated_10.json    # 10 real AG News rows (title+text), ag_news_label_id / ag_news_category (dataset labels)
 ├── scripts/sample_ag_business_probes.py  # Optional: sample 10 AG News Business rows into JSON
 ├── visualization.py                # Visualization module: generates figures
 ├── attack_baseline_alie.py         # ALIE attack baseline (NeurIPS '19)
@@ -83,7 +83,7 @@ Second-stage script loads the Fed **sequence-classification** checkpoint, copies
 
 **Probes**
 
-- [`data/ag_news_curated_10.json`](data/ag_news_curated_10.json) — **real** AG News text with `news_text` = `title + " " + text` (same rule as [`data_loader.py`](data_loader.py)). Each row may include **`gold_ag_label`** (CSV-style **1–4**: 1 World, 2 Sports, 3 Business, 4 Sci/Tech, matching CharCnn AG News) and **`gold_category`** (`"World"` \| `"Sports"` \| `"Business"` \| `"Sci/Tech"`). These gold fields are **not** passed to the model; they are written to JSONL for paper-style comparisons. Recommended with **`--prompt-style strict`**, **`--stable`**, **`--parse-strict-output`**, and **`--write-seq-cls-argmax`**.
+- [`data/ag_news_curated_10.json`](data/ag_news_curated_10.json) — **real** AG News text with `news_text` = `title + " " + text` (same rule as [`data_loader.py`](data_loader.py)). Each row may include **`ag_news_label_id`** (CSV-style **1–4**: 1 World, 2 Sports, 3 Business, 4 Sci/Tech, matching CharCnn AG News) and **`ag_news_category`** (`"World"` \| `"Sports"` \| `"Business"` \| `"Sci/Tech"`). These fields are **not** passed to the model; they are copied into JSONL as the article’s **dataset label** for side-by-side reading with `completion_*`. Probe JSON may still use legacy keys `gold_ag_label` / `gold_category`; they are normalized on load. Recommended with **`--prompt-style strict`**, **`--stable`**, and **`--write-seq-cls-argmax`**. Optional **`--parse-strict-output`** adds best-effort **`parsed_category`** / **`parsed_reason`** only.
 - [`data/ag_news_simple_probes.json`](data/ag_news_simple_probes.json) — short news + instruction to output **(1)** exactly one of World / Sports / Business / Sci/Tech and **(2)** one concise explanation sentence (aligns with AG News `num_labels=4`). Recommended with **`--prompt-style simple`** and **`--stable`** (`--stable` uses `max_new_tokens=64` by default unless you use **`strict`**; see below).
 - [`data/financial_probes.json`](data/financial_probes.json) — finance-themed synthetic snippets (harder for small base LMs).
 
@@ -97,11 +97,11 @@ python scripts/sample_ag_business_probes.py --csv AG_News_Datasets/train.csv -o 
 
 **Stability flags**
 
-- **`--stable`**: greedy decoding; default `max_new_tokens` is **64** for `default` / `simple`, **72** for **`strict`** (two lines + stopping criteria), **96** for **`strict_json`** (override with `--max-new-tokens`). Default `repetition_penalty` is **1.1**, or **1.15** with **`strict`** / **`strict_json`** (unless you set `--repetition-penalty`).
+- **`--stable`**: greedy decoding; default `max_new_tokens` is **64** for `default` / `simple`, **72** for **`strict`**, **96** for **`strict_json`** (override with `--max-new-tokens`). Decoding runs until **EOS** or **`max_new_tokens`** (no early stop on “two lines” for single-pass strict/json). Default `repetition_penalty` is **1.1**, or **1.15** with **`strict`** / **`strict_json`** (unless you set `--repetition-penalty`).
 - **`--write-seq-cls-argmax`**: adds `seq_cls_label_id` / `seq_cls_label` from the **SeqCLS head** (same objective as Fed training) for a reproducible label column next to free-form `completion_*`.
-- **`--prompt-style {default,simple,strict,strict_json}`**: `simple` / `default` as before; **`strict`** uses a **prefix prompt** ending with `Category: ` so the model continues with `<Word>\\nReason: ...`; decoding stops after **two lines** (`StoppingCriteria`). **`strict_json`** asks for one JSON object with `"category"` and `"reason"` keys; decode stops after `}`. **`--strict-few-shot`** adds one in-prompt two-line example ( **`strict` only** ). **`--strict-two-stage`**: short phase A for the category word, then phase B for `Reason:` only (assembled two-line `completion_primary`); **`--reason-only`** fixes category from the SeqCLS head (**requires** **`--write-seq-cls-argmax`**).
-- **`--parse-strict-output`**: parses **`strict`** / two-stage outputs with line rules; parses **`strict_json`** with `json.loads`. Writes **`parsed_category`**, **`parsed_reason`**, **`format_valid`** (lenient), **`format_valid_strict`** (exactly two lines, reason ≤25 words, or valid JSON with word limit), and **`matches_gold_category`** / **`matches_gold_category_strict`** when **`gold_category`** is set.
-- **`--parse-retry-max N`**: for **`strict`**, **`strict_json`**, or **`--strict-two-stage`** only: if the parse criterion is not met, run up to **`N` additional** decodes (so **`N=2`** ⇒ at most **3** generations per probe). Retries use **`do_sample=True`** and **`--parse-retry-temperature`** so outputs can differ from greedy first passes. Success by default requires **`format_valid_strict`**; use **`--parse-retry-lenient`** to stop on **`format_valid`** only. If **`N>0`** with other prompt styles, the flag is ignored (warning). JSONL adds **`parse_retry_max_attempts`**, **`parse_attempts`**, **`parse_retry_exhausted`** when retries are active; with **`--compare-checkpoint`**, the same keys appear with a **`_compare`** suffix for the second model.
+- **`--prompt-style {default,simple,strict,strict_json}`**: `simple` / `default` as before; **`strict`** uses a **prefix prompt** ending with `Category: ` so the model continues with category + reason in free form. **`strict_json`** asks for one JSON object with `"category"` and `"reason"` keys. **`--strict-few-shot`** adds one in-prompt two-line example ( **`strict` only** ). **`--strict-two-stage`**: short phase A for the category word, then phase B for `Reason:` only (assembled two-line `completion_primary`; phase A/B still use newline-based stopping inside the pipeline); **`--reason-only`** fixes category from the SeqCLS head (**requires** **`--write-seq-cls-argmax`**).
+- **`--parse-strict-output`**: best-effort parse of **`strict`** / two-stage / **`strict_json`** text; writes **`parsed_category`** and **`parsed_reason`** to JSONL only (no format booleans or dataset “match” flags).
+- **`--parse-retry-max N`**: **requires `--parse-strict-output`**. For **`strict`**, **`strict_json`**, or **`--strict-two-stage`**: if the parse criterion is not met, run up to **`N` additional** decodes (so **`N=2`** ⇒ at most **3** generations per probe). Retries use **`do_sample=True`** and **`--parse-retry-temperature`**. Success by default requires strict parse; use **`--parse-retry-lenient`** for lenient parse. If **`N>0`** without **`--parse-strict-output`**, the value is ignored (warning). If **`N>0`** with other prompt styles, the flag is ignored (warning). JSONL adds **`parse_retry_max_attempts`**, **`parse_attempts`**, **`parse_retry_exhausted`** when retries are active; with **`--compare-checkpoint`**, the same keys appear with a **`_compare`** suffix for the second model.
 
 **Qwen2.5 + AG News (curated real probes + strict format)** (after saving a checkpoint with `model_name=Qwen/Qwen2.5-0.5B`, `dataset=ag_news`, `num_labels=4`):
 
@@ -112,8 +112,7 @@ python run_downstream_generation.py \
   --output results/downstream_curated.jsonl \
   --stable \
   --write-seq-cls-argmax \
-  --prompt-style strict \
-  --parse-strict-output
+  --prompt-style strict
 ```
 
 **Two-stage strict** (category then reason; optional **`--reason-only`** with SeqCLS category — requires **`--write-seq-cls-argmax`**):
@@ -126,7 +125,6 @@ python run_downstream_generation.py \
   --stable \
   --write-seq-cls-argmax \
   --prompt-style strict \
-  --parse-strict-output \
   --strict-two-stage
 ```
 
@@ -165,9 +163,9 @@ python run_downstream_generation.py \
   --prompt-style simple
 ```
 
-JSONL fields: `probe_id`, `news_text`, `question`, `prompt_style`, `completion_primary`; optional `gold_ag_label`, `gold_category` when present in the probe JSON; with `--compare-checkpoint`, also `completion_compare` and `seq_cls_compare_*`; with `--write-seq-cls-argmax`, also `seq_cls_label_id`, `seq_cls_label`; with **`--parse-strict-output`**, also `parsed_category`, `parsed_reason`, `format_valid`, `format_valid_strict`, `matches_gold_category`, `matches_gold_category_strict` when applicable. Use `--greedy` for greedy decoding without full `--stable`; `--base-model` overrides the HF id for CausalLM/tokenizer (only if it matches the saved architecture).
+JSONL fields: `probe_id`, `news_text`, `question`, `prompt_style`, `completion_primary`; optional `ag_news_label_id`, `ag_news_category` when present in the probe JSON (or after normalizing legacy `gold_*` keys); with `--compare-checkpoint`, also `completion_compare` and `seq_cls_compare_*`; with `--write-seq-cls-argmax`, also `seq_cls_label_id`, `seq_cls_label`; with **`--parse-strict-output`**, also `parsed_category`, `parsed_reason`. Use `--greedy` for greedy decoding without full `--stable`; `--base-model` overrides the HF id for CausalLM/tokenizer (only if it matches the saved architecture).
 
-**Evaluation tip**: report both **`format_valid`** (anywhere in text) and **`format_valid_strict`** (anchored two-line / JSON + word cap) to separate “parsable” from “fully compliant” outputs.
+**Observation tip**: the main artifact for studying poisoning effects is the full **`completion_primary`** (and optional **`completion_compare`**) next to **`seq_cls_*`** and dataset labels—not strict format compliance.
 
 **Parse retry note**: under **`--stable`**, the first attempt stays greedy; without retries, repeating generation would often duplicate the same text. After a failed parse, retries intentionally use sampling—tune **`--parse-retry-temperature`** if outputs are too noisy.
 
