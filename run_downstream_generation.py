@@ -48,7 +48,7 @@ DEFAULT_MAX_NEW_TOKENS = 128
 STABLE_MAX_NEW_TOKENS = 64
 STABLE_REPETITION_PENALTY = 1.1
 # Under --stable with --prompt-style strict: Category + Reason style; decode until max_new_tokens or EOS
-STABLE_MAX_NEW_TOKENS_STRICT = 72
+STABLE_MAX_NEW_TOKENS_STRICT = 128
 STABLE_REPETITION_PENALTY_STRICT = 1.15
 # strict_json: JSON-style completion; decode until max_new_tokens or EOS
 STABLE_MAX_NEW_TOKENS_STRICT_JSON = 96
