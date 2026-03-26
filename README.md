@@ -83,7 +83,7 @@ Second-stage script loads the Fed **sequence-classification** checkpoint, copies
 
 **Probes**
 
-- [`data/ag_news_curated_10.json`](data/ag_news_curated_10.json) — **real** AG News text with `news_text` = `title + " " + text` (same rule as [`data_loader.py`](data_loader.py)). Each row may include **`ag_news_label_id`** (CSV-style **1–4**: 1 World, 2 Sports, 3 Business, 4 Sci/Tech, matching CharCnn AG News) and **`ag_news_category`** (`"World"` \| `"Sports"` \| `"Business"` \| `"Sci/Tech"`). These fields are **not** passed to the model; they are copied into JSONL as the article’s **dataset label** for side-by-side reading with `completion_*`. Probe JSON may still use legacy keys `gold_ag_label` / `gold_category`; they are normalized on load. Recommended with **`--prompt-style strict`**, **`--stable`**, and **`--write-seq-cls-argmax`**. Optional **`--parse-strict-output`** adds best-effort **`parsed_category`** / **`parsed_reason`** only.
+- [`data/ag_news_curated_10.json`](data/ag_news_curated_10.json) — **real** AG News text with `news_text` = `title + " " + text` (same rule as [`data_loader.py`](data_loader.py)). Each row may include **`ag_news_label_id`** (CSV-style **1–4**: 1 World, 2 Sports, 3 Business, 4 Sci/Tech, matching CharCnn AG News) and **`ag_news_category`** (`"World"` \| `"Sports"` \| `"Business"` \| `"Sci/Tech"`). These fields are **not** passed to the model; they are copied into JSONL as the article’s **dataset label** for side-by-side reading with `completion_*`. Probe JSON may still use legacy keys `gold_ag_label` / `gold_category`; they are normalized on load. Recommended with **`--prompt-style strict`**, **`--strict-two-stage`**, **`--stable`**, and **`--write-seq-cls-argmax`**. Optional **`--parse-strict-output`** adds best-effort **`parsed_category`** / **`parsed_reason`** only.
 - [`data/ag_news_simple_probes.json`](data/ag_news_simple_probes.json) — short news + instruction to output **(1)** exactly one of World / Sports / Business / Sci/Tech and **(2)** one concise explanation sentence (aligns with AG News `num_labels=4`). Recommended with **`--prompt-style simple`** and **`--stable`** (`--stable` uses `max_new_tokens=64` by default unless you use **`strict`**; see below).
 - [`data/financial_probes.json`](data/financial_probes.json) — finance-themed synthetic snippets (harder for small base LMs).
 
@@ -97,13 +97,13 @@ python scripts/sample_ag_business_probes.py --csv AG_News_Datasets/train.csv -o 
 
 **Stability flags**
 
-- **`--stable`**: greedy decoding; default `max_new_tokens` is **64** for `default` / `simple`, **128** for **`strict`**, **96** for **`strict_json`** (override with `--max-new-tokens`). Decoding runs until **EOS** or **`max_new_tokens`** (no early stop on “two lines” for single-pass strict/json). Default `repetition_penalty` is **1.1**, or **1.15** with **`strict`** / **`strict_json`** (unless you set `--repetition-penalty`).
+- **`--stable`**: greedy decoding; default `max_new_tokens` is **64** for `default` / `simple`, **128** for **`strict`**, **96** for **`strict_json`** (override with `--max-new-tokens`). Decoding runs until **EOS** or **`max_new_tokens`**; in strict two-stage mode, phase A / phase B each stop at the first newline while staying within those token budgets. Default `repetition_penalty` is **1.1**, or **1.15** with **`strict`** / **`strict_json`** (unless you set `--repetition-penalty`).
 - **`--write-seq-cls-argmax`**: adds `seq_cls_label_id` / `seq_cls_label` from the **SeqCLS head** (same objective as Fed training) for a reproducible label column next to free-form `completion_*`.
-- **`--prompt-style {default,simple,strict,strict_json}`**: `simple` / `default` as before; **`strict`** uses a **prefix prompt** ending with `Category: ` so the model continues with category + reason in free form. **`strict_json`** asks for one JSON object with `"category"` and `"reason"` keys. **`--strict-few-shot`** adds one in-prompt two-line example ( **`strict` only** ). **`--strict-two-stage`**: short phase A for the category word, then phase B for `Reason:` only (assembled two-line `completion_primary`; phase A/B still use newline-based stopping inside the pipeline); **`--reason-only`** fixes category from the SeqCLS head (**requires** **`--write-seq-cls-argmax`**).
+- **`--prompt-style {default,simple,strict,strict_json}`**: `simple` / `default` as before. **`strict`** is the recommended “classification + reason” family and now uses **two-stage generation by default** unless you pass **`--single-pass-strict`**. In two-stage strict mode, phase A chooses a label ID (`A/B/C/D`) and phase B writes only the reason sentence; the final `completion_primary` is still rendered as human-readable `Category: ...` + `Reason: ...`. **`strict_json`** asks for one JSON object with `"category"` and `"reason"` keys. **`--strict-few-shot`** adds one in-prompt two-line example ( **`strict` only** ). **`--strict-two-stage`** keeps the default explicit; **`--single-pass-strict`** restores the legacy one-shot prompt. **`--reason-only`** fixes category from the SeqCLS head (**requires** **`--write-seq-cls-argmax`**).
 - **`--parse-strict-output`**: best-effort parse of **`strict`** / two-stage / **`strict_json`** text; writes **`parsed_category`** and **`parsed_reason`** to JSONL only (no format booleans or dataset “match” flags).
 - **`--parse-retry-max N`**: **requires `--parse-strict-output`**. For **`strict`**, **`strict_json`**, or **`--strict-two-stage`**: if the parse criterion is not met, run up to **`N` additional** decodes (so **`N=2`** ⇒ at most **3** generations per probe). Retries use **`do_sample=True`** and **`--parse-retry-temperature`**. Success by default requires strict parse; use **`--parse-retry-lenient`** for lenient parse. If **`N>0`** without **`--parse-strict-output`**, the value is ignored (warning). If **`N>0`** with other prompt styles, the flag is ignored (warning). JSONL adds **`parse_retry_max_attempts`**, **`parse_attempts`**, **`parse_retry_exhausted`** when retries are active; with **`--compare-checkpoint`**, the same keys appear with a **`_compare`** suffix for the second model.
 
-**Qwen2.5 + AG News (curated real probes + strict format)** (after saving a checkpoint with `model_name=Qwen/Qwen2.5-0.5B`, `dataset=ag_news`, `num_labels=4`):
+**Qwen2.5 + AG News (curated real probes + recommended strict two-stage)** (after saving a checkpoint with `model_name=Qwen/Qwen2.5-0.5B`, `dataset=ag_news`, `num_labels=4`):
 
 ```bash
 python run_downstream_generation.py \
@@ -112,20 +112,35 @@ python run_downstream_generation.py \
   --output results/downstream_curated.jsonl \
   --stable \
   --write-seq-cls-argmax \
-  --prompt-style strict
+  --prompt-style strict \
+  --strict-two-stage
 ```
 
-**Two-stage strict** (category then reason; optional **`--reason-only`** with SeqCLS category — requires **`--write-seq-cls-argmax`**):
+**Strict single-pass (legacy / comparison only)**:
 
 ```bash
 python run_downstream_generation.py \
   --checkpoint results/global_checkpoint \
   --probes data/ag_news_curated_10.json \
-  --output results/downstream_twostage.jsonl \
+  --output results/downstream_single_pass.jsonl \
   --stable \
   --write-seq-cls-argmax \
   --prompt-style strict \
-  --strict-two-stage
+  --single-pass-strict
+```
+
+**Two-stage strict with SeqCLS-fixed category** (optional **`--reason-only`**, requires **`--write-seq-cls-argmax`**):
+
+```bash
+python run_downstream_generation.py \
+  --checkpoint results/global_checkpoint \
+  --probes data/ag_news_curated_10.json \
+  --output results/downstream_reason_only.jsonl \
+  --stable \
+  --write-seq-cls-argmax \
+  --prompt-style strict \
+  --strict-two-stage \
+  --reason-only
 ```
 
 **Short synthetic probes** (`ag_news_simple_probes.json` + `simple` template):
@@ -163,7 +178,7 @@ python run_downstream_generation.py \
   --prompt-style simple
 ```
 
-JSONL fields: `probe_id`, `news_text`, `question`, `prompt_style`, `completion_primary`; optional `ag_news_label_id`, `ag_news_category` when present in the probe JSON (or after normalizing legacy `gold_*` keys); with `--compare-checkpoint`, also `completion_compare` and `seq_cls_compare_*`; with `--write-seq-cls-argmax`, also `seq_cls_label_id`, `seq_cls_label`; with **`--parse-strict-output`**, also `parsed_category`, `parsed_reason`. Use `--greedy` for greedy decoding without full `--stable`; `--base-model` overrides the HF id for CausalLM/tokenizer (only if it matches the saved architecture).
+JSONL fields: `probe_id`, `news_text`, `question`, `prompt_style`, `generation_mode`, `completion_primary`; optional `ag_news_label_id`, `ag_news_category` when present in the probe JSON (or after normalizing legacy `gold_*` keys); with `--compare-checkpoint`, also `completion_compare` and `seq_cls_compare_*`; with `--write-seq-cls-argmax`, also `seq_cls_label_id`, `seq_cls_label`; in strict two-stage mode, also `two_stage_category`, `two_stage_category_source`, `two_stage_phase_a_raw`, `two_stage_reason_raw`; with **`--parse-strict-output`**, also `parsed_category`, `parsed_reason`. Use `--greedy` for greedy decoding without full `--stable`; `--base-model` overrides the HF id for CausalLM/tokenizer (only if it matches the saved architecture).
 
 **Observation tip**: the main artifact for studying poisoning effects is the full **`completion_primary`** (and optional **`completion_compare`**) next to **`seq_cls_*`** and dataset labels—not strict format compliance.
 

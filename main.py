@@ -1002,11 +1002,12 @@ def main(config_overrides: Optional[Dict] = None):
         'downstream_probes': 'data/ag_news_curated_10.json',  # Probe JSON path (relative to repo root / cwd)
         'downstream_output': None,  # None -> results/<experiment_name>_downstream_gen.jsonl; else path (relative to results/ if not absolute)
         'downstream_device': None,  # None -> cuda if available else cpu
-        # Extra CLI tokens for run_downstream_generation.py (e.g. --stable; --parse-retry-max needs --parse-strict-output)
+        # Extra CLI tokens for run_downstream_generation.py (default: strict two-stage classification + reason)
         'downstream_cli_args': [
             '--stable',
             '--write-seq-cls-argmax',
             '--prompt-style', 'strict',
+            '--strict-two-stage',
         ],
 
     }

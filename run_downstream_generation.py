@@ -13,7 +13,8 @@ Example:
     --checkpoint results/global_checkpoint \\
     --probes data/ag_news_curated_10.json \\
     --output results/downstream_curated.jsonl \\
-    --prompt-style strict --stable --write-seq-cls-argmax
+    --prompt-style strict --stable --write-seq-cls-argmax \\
+    --strict-two-stage
 
   python run_downstream_generation.py \\
     --checkpoint results/global_checkpoint \\
@@ -65,6 +66,13 @@ _STRICT_CATEGORY_CANONICAL = {
     "business": "Business",
     "sci/tech": "Sci/Tech",
 }
+_STRICT_CATEGORY_IDS = {
+    "A": "World",
+    "B": "Sports",
+    "C": "Business",
+    "D": "Sci/Tech",
+}
+_STRICT_CATEGORY_ID_BY_NAME = {v: k for k, v in _STRICT_CATEGORY_IDS.items()}
 _STRICT_CATEGORY_LINE = re.compile(
     r"^\s*Category:\s*(World|Sports|Business|Sci/Tech)\s*$",
     re.MULTILINE | re.IGNORECASE,
@@ -292,21 +300,26 @@ def parse_strict_json_completion(completion: str) -> Tuple[Optional[str], Option
 
 def phase_a_category_prompt(news_text: str) -> str:
     return (
-        "Pick exactly one AG News category for the article. "
-        "Reply with ONE word only: World, Sports, Business, or Sci/Tech.\n\n"
+        "Choose the best AG News category for the article.\n"
+        "Return exactly one label ID and nothing else:\n"
+        "A = World\n"
+        "B = Sports\n"
+        "C = Business\n"
+        "D = Sci/Tech\n\n"
         f"Article:\n{news_text}\n\n"
-        "Answer:\n"
+        "Label ID:\n"
     )
 
 
 def phase_b_reason_prompt(news_text: str, category: str) -> str:
+    cat_id = _STRICT_CATEGORY_ID_BY_NAME.get(category, "?")
     return (
-        f"You already chose category: {category}.\n"
-        "Write ONE English sentence (max 25 words) explaining why this article fits that category, "
-        "using only evidence from the article. Do not repeat the whole article.\n\n"
+        f"Chosen category: {category} ({cat_id}).\n"
+        "Write one short English sentence explaining why the article fits this category.\n"
+        "Use only evidence from the article. Keep it under 25 words.\n"
+        "Output only the sentence. No prefix. No quotes.\n\n"
         f"Article:\n{news_text}\n\n"
-        "Output exactly one line starting with 'Reason: '.\n"
-        "Reason: "
+        "Sentence:\n"
     )
 
 
@@ -314,9 +327,20 @@ def parse_phase_a_category(text: str) -> Optional[str]:
     t = (text or "").strip()
     if not t:
         return None
+    tu = t.upper()
+    m = re.match(r"\s*([ABCD])(?:\b|$)", tu)
+    if m:
+        return _STRICT_CATEGORY_IDS[m.group(1)]
+    m = re.match(r"\s*([1-4])(?:\b|$)", t)
+    if m:
+        return _STRICT_CATEGORY_IDS.get(chr(ord("A") + int(m.group(1)) - 1))
+
     tl = t.lower()
-    if re.search(r"\bsci\s*/\s*tech\b", tl) or "sci/tech" in tl.replace(" ", ""):
+    if re.search(r"\bscience\s*/\s*tech\b", tl) or re.search(r"\bsci\s*/\s*tech\b", tl):
         return "Sci/Tech"
+    for cid, canon in _STRICT_CATEGORY_IDS.items():
+        if re.search(rf"\b{cid}\b\s*[:= -]?\s*{re.escape(canon.lower())}\b", tl, re.IGNORECASE):
+            return canon
     for word, canon in (
         ("business", "Business"),
         ("sports", "Sports"),
@@ -325,6 +349,13 @@ def parse_phase_a_category(text: str) -> Optional[str]:
         if re.search(rf"\b{word}\b", tl):
             return canon
     return None
+
+
+def clean_reason_text(text: str) -> str:
+    rb = (text or "").strip()
+    rb = re.sub(r"^(reason|sentence)\s*:\s*", "", rb, flags=re.IGNORECASE)
+    rb = rb.strip().strip("\"'").strip()
+    return re.sub(r"\s+", " ", rb).strip()
 
 
 def seq_cls_to_ag_category(label_id: int, label_str: str, num_labels: int) -> str:
@@ -494,12 +525,15 @@ def _generate_strict_two_stage_one(
     seq_primary: Optional[List[Tuple[int, str]]],
     probe_index: int,
     num_labels: int,
-) -> str:
+) -> Tuple[str, Dict[str, Any]]:
+    meta: Dict[str, Any] = {"generation_mode": "strict_two_stage"}
     if reason_only:
         if seq_row is None:
             raise ValueError("strict_two_stage with reason_only requires seq_cls row per probe.")
         pid, lab = seq_row
         cat = seq_cls_to_ag_category(pid, lab, num_labels)
+        meta["two_stage_category_source"] = "seq_cls_reason_only"
+        meta["two_stage_phase_a_raw"] = ""
     else:
         p1 = phase_a_category_prompt(news_text)
         inp1 = tokenizer(p1, return_tensors="pt", truncation=True, max_length=2048)
@@ -516,12 +550,17 @@ def _generate_strict_two_stage_one(
             repetition_penalty=repetition_penalty,
             stopping_criteria=stop1,
         )
+        meta["two_stage_phase_a_raw"] = raw_a
         cat = parse_phase_a_category(raw_a)
-        if not cat and seq_primary is not None:
+        if cat:
+            meta["two_stage_category_source"] = "phase_a"
+        elif seq_primary is not None:
             pid, lab = seq_primary[probe_index]
             cat = seq_cls_to_ag_category(pid, lab, num_labels)
+            meta["two_stage_category_source"] = "seq_cls_fallback"
         if not cat:
             cat = "World"
+            meta["two_stage_category_source"] = "default_world_fallback"
 
     p2 = phase_b_reason_prompt(news_text, cat)
     inp2 = tokenizer(p2, return_tensors="pt", truncation=True, max_length=2048)
@@ -538,10 +577,10 @@ def _generate_strict_two_stage_one(
         repetition_penalty=repetition_penalty,
         stopping_criteria=stop2,
     )
-    rb = raw_b.strip()
-    if rb.lower().startswith("reason:"):
-        rb = rb.split(":", 1)[-1].strip()
-    return f"Category: {cat}\nReason: {rb}"
+    meta["two_stage_category"] = cat
+    meta["two_stage_reason_raw"] = raw_b
+    rb = clean_reason_text(raw_b)
+    return f"Category: {cat}\nReason: {rb}", meta
 
 
 def _generate_single_pass_one(
@@ -629,7 +668,7 @@ def run_for_checkpoint(
                     if reason_only and seq_primary is not None and i < len(seq_primary)
                     else None
                 )
-                text = _generate_strict_two_stage_one(
+                text, gen_meta = _generate_strict_two_stage_one(
                     causal,
                     tokenizer,
                     device,
@@ -644,6 +683,7 @@ def run_for_checkpoint(
                     probe_index=i,
                     num_labels=num_labels,
                 )
+                meta_row.update(gen_meta)
             else:
                 text = _generate_single_pass_one(
                     causal,
@@ -657,6 +697,9 @@ def run_for_checkpoint(
                     sample_here,
                     temp_here,
                     repetition_penalty,
+                )
+                meta_row["generation_mode"] = (
+                    "strict_single_pass" if prompt_style == "strict" else prompt_style
                 )
 
             best_text = text
@@ -735,7 +778,11 @@ def main() -> None:
         type=str,
         choices=("default", "simple", "strict", "strict_json"),
         default="default",
-        help="Prompt: 'strict' = prefix Category + two-line; 'strict_json' = one JSON object with category/reason",
+        help=(
+            "Prompt family: 'strict' = human-readable Category/Reason output "
+            "(two-stage by default unless --single-pass-strict); "
+            "'strict_json' = one JSON object with category/reason"
+        ),
     )
     parser.add_argument(
         "--strict-few-shot",
@@ -745,7 +792,15 @@ def main() -> None:
     parser.add_argument(
         "--strict-two-stage",
         action="store_true",
-        help="Category via short phase-A prompt (or --reason-only from SeqCLS), then Reason only; implies two-line output.",
+        help=(
+            "Category via short phase-A prompt (or --reason-only from SeqCLS), then Reason only; "
+            "this is the default with --prompt-style strict unless --single-pass-strict is used."
+        ),
+    )
+    parser.add_argument(
+        "--single-pass-strict",
+        action="store_true",
+        help="With --prompt-style strict: disable the default two-stage path and use legacy single-pass generation.",
     )
     parser.add_argument(
         "--reason-only",
@@ -830,6 +885,9 @@ def main() -> None:
             )
 
     prompt_fn = make_prompt_fn(args.prompt_style, strict_few_shot=args.strict_few_shot)
+    use_strict_two_stage = args.strict_two_stage or (
+        args.prompt_style == "strict" and not args.single_pass_strict
+    )
 
     tokenizer_shared = build_tokenizer(base_name)
 
@@ -842,17 +900,17 @@ def main() -> None:
         )
         print(f"  SeqCLS argmax predictions (primary): {len(seq_primary)} probes")
 
-    if args.reason_only and not args.strict_two_stage:
-        print("  Note: --reason-only has no effect without --strict-two-stage", file=sys.stderr)
-    if args.strict_two_stage and args.reason_only and not args.write_seq_cls_argmax:
+    if args.reason_only and not use_strict_two_stage:
+        print("  Note: --reason-only has no effect without strict two-stage generation", file=sys.stderr)
+    if use_strict_two_stage and args.reason_only and not args.write_seq_cls_argmax:
         print("  Error: --reason-only requires --write-seq-cls-argmax.", file=sys.stderr)
         sys.exit(1)
-    if args.strict_two_stage and args.prompt_style == "strict_json":
+    if use_strict_two_stage and args.prompt_style == "strict_json":
         print("  Error: --strict-two-stage is only supported with --prompt-style strict.", file=sys.stderr)
         sys.exit(1)
 
     if args.parse_retry_max > 0 and not (
-        args.strict_two_stage or args.prompt_style in ("strict", "strict_json")
+        use_strict_two_stage or args.prompt_style in ("strict", "strict_json")
     ):
         print(
             "  Warning: --parse-retry-max ignored unless --prompt-style strict|strict_json or --strict-two-stage.",
@@ -878,7 +936,7 @@ def main() -> None:
         do_sample,
         args.temperature,
         repetition_penalty=repetition_penalty,
-        strict_two_stage=args.strict_two_stage,
+        strict_two_stage=use_strict_two_stage,
         reason_only=args.reason_only,
         seq_primary=seq_primary,
         num_labels=int(meta_a["num_labels"]),
@@ -922,7 +980,7 @@ def main() -> None:
             do_sample,
             args.temperature,
             repetition_penalty=repetition_penalty,
-            strict_two_stage=args.strict_two_stage,
+            strict_two_stage=use_strict_two_stage,
             reason_only=args.reason_only,
             seq_primary=seq_compare,
             num_labels=int(meta_b["num_labels"]),
@@ -939,6 +997,11 @@ def main() -> None:
                 "news_text": p["news_text"],
                 "question": p.get("question", ""),
                 "prompt_style": args.prompt_style,
+                "generation_mode": (
+                    "strict_two_stage" if use_strict_two_stage else (
+                        "strict_single_pass" if args.prompt_style == "strict" else args.prompt_style
+                    )
+                ),
                 "completion_primary": completions_a[i],
             }
             if "ag_news_label_id" in p:
@@ -948,7 +1011,7 @@ def main() -> None:
             if retry_meta_a[i]:
                 row.update(retry_meta_a[i])
             if args.parse_strict_output:
-                if args.prompt_style == "strict_json" and not args.strict_two_stage:
+                if args.prompt_style == "strict_json" and not use_strict_two_stage:
                     pc, pr, _, _ = parse_strict_json_completion(completions_a[i])
                 else:
                     pc, pr, _, _ = parse_strict_completion(completions_a[i])
