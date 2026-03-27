@@ -55,6 +55,7 @@ STABLE_REPETITION_PENALTY_STRICT = 1.15
 STABLE_MAX_NEW_TOKENS_STRICT_JSON = 96
 
 AG_NEWS_ID2LABEL_FALLBACK = {0: "World", 1: "Sports", 2: "Business", 3: "Sci/Tech"}
+AG_NEWS_LABEL2ID_FALLBACK = {v: k for k, v in AG_NEWS_ID2LABEL_FALLBACK.items()}
 # Prompt ends with this; completion is prefix + model continuation.
 STRICT_COMPLETION_PREFIX = "Category: "
 STRICT_REASON_MAX_WORDS = 25
@@ -65,14 +66,8 @@ _STRICT_CATEGORY_CANONICAL = {
     "sports": "Sports",
     "business": "Business",
     "sci/tech": "Sci/Tech",
+    "science/tech": "Sci/Tech",
 }
-_STRICT_CATEGORY_IDS = {
-    "A": "World",
-    "B": "Sports",
-    "C": "Business",
-    "D": "Sci/Tech",
-}
-_STRICT_CATEGORY_ID_BY_NAME = {v: k for k, v in _STRICT_CATEGORY_IDS.items()}
 _STRICT_CATEGORY_LINE = re.compile(
     r"^\s*Category:\s*(World|Sports|Business|Sci/Tech)\s*$",
     re.MULTILINE | re.IGNORECASE,
@@ -222,6 +217,38 @@ def _reason_word_count(reason: str) -> int:
     return len([w for w in (reason or "").split() if w])
 
 
+def category_to_label_id(category: Optional[str]) -> Optional[int]:
+    if category is None:
+        return None
+    return AG_NEWS_LABEL2ID_FALLBACK.get(category)
+
+
+def label_id_to_category(label_id: Optional[int]) -> Optional[str]:
+    if label_id is None:
+        return None
+    return AG_NEWS_ID2LABEL_FALLBACK.get(int(label_id))
+
+
+def normalize_category_name(raw: Optional[str]) -> Optional[str]:
+    if raw is None:
+        return None
+    return _STRICT_CATEGORY_CANONICAL.get(str(raw).strip().lower())
+
+
+def normalize_dataset_label_id(raw: Any, category_hint: Optional[str] = None) -> Optional[int]:
+    if raw is None:
+        return category_to_label_id(normalize_category_name(category_hint))
+    try:
+        val = int(raw)
+    except (TypeError, ValueError):
+        return category_to_label_id(normalize_category_name(category_hint))
+    if 0 <= val <= 3:
+        return val
+    if 1 <= val <= 4:
+        return val - 1
+    return category_to_label_id(normalize_category_name(category_hint))
+
+
 def parse_strict_completion(completion: str) -> Tuple[Optional[str], Optional[str], bool, bool]:
     """Return (category, reason, format_valid, format_valid_strict).
 
@@ -302,17 +329,17 @@ def phase_a_category_prompt(news_text: str) -> str:
     return (
         "Choose the best AG News category for the article.\n"
         "Return exactly one label ID and nothing else:\n"
-        "A = World\n"
-        "B = Sports\n"
-        "C = Business\n"
-        "D = Sci/Tech\n\n"
+        "0 = World\n"
+        "1 = Sports\n"
+        "2 = Business\n"
+        "3 = Sci/Tech\n\n"
         f"Article:\n{news_text}\n\n"
         "Label ID:\n"
     )
 
 
 def phase_b_reason_prompt(news_text: str, category: str) -> str:
-    cat_id = _STRICT_CATEGORY_ID_BY_NAME.get(category, "?")
+    cat_id = category_to_label_id(category)
     return (
         f"Chosen category: {category} ({cat_id}).\n"
         "Write one short English sentence explaining why the article fits this category.\n"
@@ -323,31 +350,34 @@ def phase_b_reason_prompt(news_text: str, category: str) -> str:
     )
 
 
-def parse_phase_a_category(text: str) -> Optional[str]:
+def parse_phase_a_category(text: str) -> Optional[int]:
     t = (text or "").strip()
     if not t:
         return None
+    m = re.match(r"\s*([0-3])(?:\b|$)", t)
+    if m:
+        return int(m.group(1))
     tu = t.upper()
     m = re.match(r"\s*([ABCD])(?:\b|$)", tu)
     if m:
-        return _STRICT_CATEGORY_IDS[m.group(1)]
+        return ord(m.group(1)) - ord("A")
     m = re.match(r"\s*([1-4])(?:\b|$)", t)
     if m:
-        return _STRICT_CATEGORY_IDS.get(chr(ord("A") + int(m.group(1)) - 1))
+        return int(m.group(1)) - 1
 
     tl = t.lower()
     if re.search(r"\bscience\s*/\s*tech\b", tl) or re.search(r"\bsci\s*/\s*tech\b", tl):
-        return "Sci/Tech"
-    for cid, canon in _STRICT_CATEGORY_IDS.items():
+        return category_to_label_id("Sci/Tech")
+    for cid, canon in AG_NEWS_ID2LABEL_FALLBACK.items():
         if re.search(rf"\b{cid}\b\s*[:= -]?\s*{re.escape(canon.lower())}\b", tl, re.IGNORECASE):
-            return canon
+            return cid
     for word, canon in (
         ("business", "Business"),
         ("sports", "Sports"),
         ("world", "World"),
     ):
         if re.search(rf"\b{word}\b", tl):
-            return canon
+            return category_to_label_id(canon)
     return None
 
 
@@ -364,11 +394,8 @@ def seq_cls_to_ag_category(label_id: int, label_str: str, num_labels: int) -> st
         c = AG_NEWS_ID2LABEL_FALLBACK.get(label_id)
         if c:
             return c
-    ls = (label_str or "").strip()
-    lk = ls.lower()
-    if lk in _STRICT_CATEGORY_CANONICAL:
-        return _STRICT_CATEGORY_CANONICAL[lk]
-    return ls if ls in ("World", "Sports", "Business", "Sci/Tech") else ""
+    ls = normalize_category_name(label_str)
+    return ls or ""
 
 
 def make_prompt_fn(style: str, *, strict_few_shot: bool = False) -> Callable[[str, str], str]:
@@ -395,10 +422,22 @@ def load_probes(path: Path) -> List[Dict[str, Any]]:
             raise ValueError(f"Probe at index {i} must be an object with 'news_text'")
         if "question" not in item:
             item["question"] = ""
-        if "ag_news_label_id" not in item and "gold_ag_label" in item:
-            item["ag_news_label_id"] = item["gold_ag_label"]
-        if "ag_news_category" not in item and "gold_category" in item:
-            item["ag_news_category"] = item["gold_category"]
+        raw_label = item.get("dataset_label_id")
+        if raw_label is None:
+            raw_label = item.get("ag_news_label_id", item.get("gold_ag_label"))
+        raw_category = item.get("dataset_category")
+        if raw_category is None:
+            raw_category = item.get("ag_news_category", item.get("gold_category"))
+        norm_category = normalize_category_name(raw_category)
+        norm_label_id = normalize_dataset_label_id(raw_label, norm_category)
+        if norm_category is None:
+            norm_category = label_id_to_category(norm_label_id)
+        if norm_label_id is None and norm_category is not None:
+            norm_label_id = category_to_label_id(norm_category)
+        if norm_label_id is not None:
+            item["dataset_label_id"] = norm_label_id
+        if norm_category is not None:
+            item["dataset_category"] = norm_category
     return data
 
 
@@ -420,7 +459,12 @@ def _classifier_config_from_news(news: NewsClassifierModel):
 def get_id2label_map(news: NewsClassifierModel, num_labels: int) -> Dict[int, str]:
     cfg = _classifier_config_from_news(news)
     if cfg is not None and getattr(cfg, "id2label", None):
-        return {int(k): str(v) for k, v in cfg.id2label.items()}
+        mapped = {}
+        for k, v in cfg.id2label.items():
+            idx = int(k)
+            canon = seq_cls_to_ag_category(idx, str(v), num_labels)
+            mapped[idx] = canon or AG_NEWS_ID2LABEL_FALLBACK.get(idx, str(v))
+        return mapped
     if num_labels == 4:
         return dict(AG_NEWS_ID2LABEL_FALLBACK)
     return {i: str(i) for i in range(num_labels)}
@@ -527,10 +571,13 @@ def _generate_strict_two_stage_one(
     num_labels: int,
 ) -> Tuple[str, Dict[str, Any]]:
     meta: Dict[str, Any] = {"generation_mode": "strict_two_stage"}
+    cat_id: Optional[int] = None
+    cat = ""
     if reason_only:
         if seq_row is None:
             raise ValueError("strict_two_stage with reason_only requires seq_cls row per probe.")
         pid, lab = seq_row
+        cat_id = pid
         cat = seq_cls_to_ag_category(pid, lab, num_labels)
         meta["two_stage_category_source"] = "seq_cls_reason_only"
         meta["two_stage_phase_a_raw"] = ""
@@ -551,14 +598,17 @@ def _generate_strict_two_stage_one(
             stopping_criteria=stop1,
         )
         meta["two_stage_phase_a_raw"] = raw_a
-        cat = parse_phase_a_category(raw_a)
-        if cat:
+        cat_id = parse_phase_a_category(raw_a)
+        if cat_id is not None:
+            cat = label_id_to_category(cat_id) or "World"
             meta["two_stage_category_source"] = "phase_a"
         elif seq_primary is not None:
             pid, lab = seq_primary[probe_index]
+            cat_id = pid
             cat = seq_cls_to_ag_category(pid, lab, num_labels)
             meta["two_stage_category_source"] = "seq_cls_fallback"
         if not cat:
+            cat_id = 0
             cat = "World"
             meta["two_stage_category_source"] = "default_world_fallback"
 
@@ -577,6 +627,7 @@ def _generate_strict_two_stage_one(
         repetition_penalty=repetition_penalty,
         stopping_criteria=stop2,
     )
+    meta["two_stage_category_id"] = cat_id
     meta["two_stage_category"] = cat
     meta["two_stage_reason_raw"] = raw_b
     rb = clean_reason_text(raw_b)
@@ -810,7 +861,7 @@ def main() -> None:
     parser.add_argument(
         "--parse-strict-output",
         action="store_true",
-        help="Best-effort parse of strict / strict_json / two-stage text; adds parsed_category, parsed_reason to JSONL only",
+        help="Best-effort parse of strict / strict_json / two-stage text; adds parsed_category_id, parsed_category, parsed_reason to JSONL only",
     )
     parser.add_argument(
         "--parse-retry-max",
@@ -835,7 +886,7 @@ def main() -> None:
     parser.add_argument(
         "--write-seq-cls-argmax",
         action="store_true",
-        help="Add seq_cls_label_id / seq_cls_label from the SeqCLS head (stable vs free generation)",
+        help="Add seq_cls_category_id / seq_cls_category from the SeqCLS head (stable vs free generation)",
     )
     parser.add_argument(
         "--cls-max-length",
@@ -1004,17 +1055,17 @@ def main() -> None:
                 ),
                 "completion_primary": completions_a[i],
             }
-            if "ag_news_label_id" in p:
-                row["ag_news_label_id"] = p["ag_news_label_id"]
-            if "ag_news_category" in p:
-                row["ag_news_category"] = p["ag_news_category"]
             if retry_meta_a[i]:
                 row.update(retry_meta_a[i])
+            if "dataset_label_id" in p:
+                row["dataset_label_id"] = p["dataset_label_id"]
+                row["dataset_category"] = p.get("dataset_category") or label_id_to_category(p["dataset_label_id"])
             if args.parse_strict_output:
                 if args.prompt_style == "strict_json" and not use_strict_two_stage:
                     pc, pr, _, _ = parse_strict_json_completion(completions_a[i])
                 else:
                     pc, pr, _, _ = parse_strict_completion(completions_a[i])
+                row["parsed_category_id"] = category_to_label_id(pc)
                 row["parsed_category"] = pc
                 row["parsed_reason"] = pr
             if completions_b is not None:
@@ -1023,11 +1074,11 @@ def main() -> None:
                     for rk, rv in retry_meta_b[i].items():
                         row[f"{rk}_compare"] = rv
             if seq_primary is not None:
-                row["seq_cls_label_id"] = seq_primary[i][0]
-                row["seq_cls_label"] = seq_primary[i][1]
+                row["seq_cls_category_id"] = seq_primary[i][0]
+                row["seq_cls_category"] = label_id_to_category(seq_primary[i][0]) or seq_primary[i][1]
             if seq_compare is not None:
-                row["seq_cls_compare_label_id"] = seq_compare[i][0]
-                row["seq_cls_compare_label"] = seq_compare[i][1]
+                row["seq_cls_compare_category_id"] = seq_compare[i][0]
+                row["seq_cls_compare_category"] = label_id_to_category(seq_compare[i][0]) or seq_compare[i][1]
             out_f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     print(f"  Wrote {len(probes)} lines to {args.output}")
