@@ -6,7 +6,7 @@ classify probes with the SeqCLS head, then generate a one-sentence explanation w
 Example:
   python run_downstream_generation.py \
     --checkpoint results/global_checkpoint \
-    --probes data/ag_news_curated_10.json \
+    --probes data/ag_news_business_30.json \
     --output results/downstream_gen.jsonl \
     --stable
 """
@@ -329,7 +329,7 @@ def main() -> None:
         help="Path to global_model.pt or directory containing global_model.pt + checkpoint_metadata.json",
     )
     parser.add_argument(
-        "--probes", type=Path, default=Path("data/ag_news_curated_10.json"),
+        "--probes", type=Path, default=Path("data/ag_news_business_30.json"),
         help="JSON list of {id, news_text, ...}",
     )
     parser.add_argument("--output", type=Path, required=True, help="Output JSONL path")

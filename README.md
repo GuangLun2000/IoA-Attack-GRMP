@@ -16,6 +16,7 @@
 ├── data/financial_probes.json      # 10 finance-style probes (news + question) for downstream gen
 ├── data/ag_news_simple_probes.json # 10 short probes: AG News 4-class label + concise explanation (downstream)
 ├── data/ag_news_curated_10.json    # 10 real AG News rows (title+text), dataset_label_id / dataset_category
+├── data/ag_news_business_30.json   # 30 Business-category AG News probes for Task 2 (default)
 ├── scripts/sample_ag_business_probes.py  # Optional: sample 10 AG News Business rows into JSON
 ├── visualization.py                # Visualization module: generates figures
 ├── attack_baseline_alie.py         # ALIE attack baseline (NeurIPS '19)
@@ -83,14 +84,14 @@ The **SeqCLS head** (from the Fed checkpoint) classifies each probe article; the
 
 **Adapters** ([`decoder_adapters.py`](decoder_adapters.py)): **Qwen2 / Qwen2.5** (`model.*`) and **Pythia / GPT-NeoX** (`gpt_neox.*`).
 
-**Probes**: [`data/ag_news_curated_10.json`](data/ag_news_curated_10.json) — 10 real AG News rows with `dataset_label_id` / `dataset_category`.
+**Probes**: [`data/ag_news_business_30.json`](data/ag_news_business_30.json) — 30 Business-category AG News test rows (attack target class), selected for topic diversity and text quality.
 
 **Run** (after saving a checkpoint with `model_name=Qwen/Qwen2.5-0.5B`, `dataset=ag_news`, `num_labels=4`):
 
 ```bash
 python run_downstream_generation.py \
   --checkpoint results/global_checkpoint \
-  --probes data/ag_news_curated_10.json \
+  --probes data/ag_news_business_30.json \
   --output results/downstream_gen.jsonl \
   --stable
 ```

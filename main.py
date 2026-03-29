@@ -999,7 +999,7 @@ def main(config_overrides: Optional[Dict] = None):
         'global_checkpoint_subdir': 'global_checkpoint',  # Subfolder name under results/ (same run uses results_dir from setup)
         # ========== Task 2: optional downstream causal generation (same run as FL) ==========
         'run_downstream_after_fl': True,  # True: subprocess run_downstream_generation.py after checkpoint save
-        'downstream_probes': 'data/ag_news_curated_10.json',  # Probe JSON path (relative to repo root / cwd)
+        'downstream_probes': 'data/ag_news_business_30.json',  # Probe JSON path (relative to repo root / cwd)
         'downstream_output': None,  # None -> results/<experiment_name>_downstream_gen.jsonl; else path (relative to results/ if not absolute)
         'downstream_device': None,  # None -> cuda if available else cpu
         # Extra CLI tokens for run_downstream_generation.py (SeqCLS classify + CausalLM explain)
