@@ -851,7 +851,7 @@ def main(config_overrides: Optional[Dict] = None):
         
         # ========== Federated Learning Setup ==========
         'num_clients': 5,  # Total number of federated learning clients (int)
-        'num_attackers': 0,  # Number of attacker clients (int, must be < num_clients)
+        'num_attackers': 3,  # Number of attacker clients (int, must be < num_clients)
         'num_benign_clients': None,  # Optional: Explicit number of benign clients for baseline experiment
                                     # If None, baseline will use (num_clients - num_attackers) to ensure fair comparison
                                     # If set, baseline experiment will use exactly this many benign clients
@@ -1002,12 +1002,9 @@ def main(config_overrides: Optional[Dict] = None):
         'downstream_probes': 'data/ag_news_curated_10.json',  # Probe JSON path (relative to repo root / cwd)
         'downstream_output': None,  # None -> results/<experiment_name>_downstream_gen.jsonl; else path (relative to results/ if not absolute)
         'downstream_device': None,  # None -> cuda if available else cpu
-        # Extra CLI tokens for run_downstream_generation.py (default: strict two-stage classification + reason)
+        # Extra CLI tokens for run_downstream_generation.py (SeqCLS classify + CausalLM explain)
         'downstream_cli_args': [
             '--stable',
-            '--write-seq-cls-argmax',
-            '--prompt-style', 'strict',
-            '--strict-two-stage',
         ],
 
     }

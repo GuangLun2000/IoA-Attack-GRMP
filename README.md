@@ -71,126 +71,35 @@ After federated training, you can persist `server.global_model` (same `NewsClass
    - `results/<global_checkpoint_subdir>/global_model.pt` — `state_dict` + embedded `metadata`
    - `results/<global_checkpoint_subdir>/checkpoint_metadata.json` — `model_name`, `num_labels`, `use_lora`, LoRA hyperparameters if applicable
    - If `use_lora=True`: `results/<global_checkpoint_subdir>/peft_adapter/` — PEFT `save_pretrained` (best-effort)
-3. Optional — **Task 2 in the same run as FL**: in [`main.py`](main.py) → `config`, set **`run_downstream_after_fl`**: `True`. After `save_global_model_checkpoint`, the script runs **`run_downstream_generation.py`** as a subprocess (same working directory as the repo). Related keys: **`downstream_probes`**, **`downstream_output`** (default: `results/<experiment_name>_downstream_gen.jsonl`), **`downstream_device`**, **`downstream_cli_args`** (extra flags such as `--parse-retry-max 2`). Skips with a warning if `global_model.pt` or the probe file is missing.
+3. Optional — **Task 2 in the same run as FL**: in [`main.py`](main.py) → `config`, set **`run_downstream_after_fl`**: `True`. After `save_global_model_checkpoint`, the script runs **`run_downstream_generation.py`** as a subprocess. Related keys: **`downstream_probes`**, **`downstream_output`** (default: `results/<experiment_name>_downstream_gen.jsonl`), **`downstream_device`**, **`downstream_cli_args`**.
 
 **FedLLM checkpoint examples:** set `model_name` to `EleutherAI/pythia-160m` or `Qwen/Qwen2.5-0.5B`, with `num_labels` / `dataset` consistent (e.g. AG News: `num_labels=4`), then enable `save_global_checkpoint` as above.
 
-### Downstream causal generation (probe JSON)
+### Task 2: Downstream explanation generation
 
-Second-stage script loads the Fed **sequence-classification** checkpoint, copies the shared **backbone** into **`AutoModelForCausalLM`** (same HF `model_name`), keeps the **pretrained `lm_head`**, and runs `generate()` on a fixed probe list (no extra training).
+The **SeqCLS head** (from the Fed checkpoint) classifies each probe article; the shared **backbone** is then transferred to **`AutoModelForCausalLM`** (pretrained `lm_head`, no extra training) which generates a one-sentence explanation for the predicted category.
+
+**Label space**: `0 = World, 1 = Sports, 2 = Business, 3 = Sci/Tech`.
 
 **Adapters** ([`decoder_adapters.py`](decoder_adapters.py)): **Qwen2 / Qwen2.5** (`model.*`) and **Pythia / GPT-NeoX** (`gpt_neox.*`).
 
-**Probes**
+**Probes**: [`data/ag_news_curated_10.json`](data/ag_news_curated_10.json) — 10 real AG News rows with `dataset_label_id` / `dataset_category`.
 
-- [`data/ag_news_curated_10.json`](data/ag_news_curated_10.json) — **real** AG News text with `news_text = title + " " + text` (same rule as [`data_loader.py`](data_loader.py)). For Task 2, labels are normalized to one shared space everywhere: **`0 = World, 1 = Sports, 2 = Business, 3 = Sci/Tech`**. Recommended with **`--prompt-style strict`**, **`--strict-two-stage`**, **`--stable`**, and **`--write-seq-cls-argmax`**. Optional **`--parse-strict-output`** adds best-effort **`parsed_category_id`**, **`parsed_category`**, and **`parsed_reason`**.
-- [`data/ag_news_simple_probes.json`](data/ag_news_simple_probes.json) — short news + instruction to output **(1)** exactly one of World / Sports / Business / Sci/Tech and **(2)** one concise explanation sentence (aligns with AG News `num_labels=4`). Recommended with **`--prompt-style simple`** and **`--stable`** (`--stable` uses `max_new_tokens=64` by default unless you use **`strict`**; see below).
-- [`data/financial_probes.json`](data/financial_probes.json) — finance-themed synthetic snippets (harder for small base LMs).
-
-To sample **AG News Business** lines into JSON, run:
-
-```bash
-python scripts/sample_ag_business_probes.py --csv AG_News_Datasets/train.csv -o data/financial_probes_ag.json
-```
-
-(AG CSV labels: `3` = Business.)
-
-**Stability flags**
-
-- **`--stable`**: greedy decoding; default `max_new_tokens` is **64** for `default` / `simple`, **128** for **`strict`**, **96** for **`strict_json`** (override with `--max-new-tokens`). Decoding runs until **EOS** or **`max_new_tokens`**; in strict two-stage mode, phase A / phase B each stop at the first newline while staying within those token budgets. Default `repetition_penalty` is **1.1**, or **1.15** with **`strict`** / **`strict_json`** (unless you set `--repetition-penalty`).
-- **`--write-seq-cls-argmax`**: adds `seq_cls_category_id` / `seq_cls_category` from the **SeqCLS head** for side-by-side reading with free-form `completion_*`.
-- **`--prompt-style {default,simple,strict,strict_json}`**: `simple` / `default` remain unchanged. **`strict`** is the recommended “classification + reason” mode and now uses **two-stage generation by default** unless you pass **`--single-pass-strict`**. In two-stage strict mode, phase A outputs exactly one label ID (`0/1/2/3`) and phase B writes only the reason sentence. The final `completion_primary` is still rendered as `Category: ...` + `Reason: ...`. **`strict_json`** asks for one JSON object with `"category"` and `"reason"` keys. **`--reason-only`** fixes category from the SeqCLS head (**requires** **`--write-seq-cls-argmax`**).
-- **`--parse-strict-output`**: best-effort parse of **`strict`** / two-stage / **`strict_json`** text; writes **`parsed_category_id`**, **`parsed_category`**, and **`parsed_reason`** to JSONL.
-- **`--parse-retry-max N`**: **requires `--parse-strict-output`**. For **`strict`**, **`strict_json`**, or **`--strict-two-stage`**: if the parse criterion is not met, run up to **`N` additional** decodes (so **`N=2`** ⇒ at most **3** generations per probe). Retries use **`do_sample=True`** and **`--parse-retry-temperature`**. Success by default requires strict parse; use **`--parse-retry-lenient`** for lenient parse. If **`N>0`** without **`--parse-strict-output`**, the value is ignored (warning). If **`N>0`** with other prompt styles, the flag is ignored (warning). JSONL adds **`parse_retry_max_attempts`**, **`parse_attempts`**, **`parse_retry_exhausted`** when retries are active; with **`--compare-checkpoint`**, the same keys appear with a **`_compare`** suffix for the second model.
-
-**Qwen2.5 + AG News (curated real probes + recommended strict two-stage)** (after saving a checkpoint with `model_name=Qwen/Qwen2.5-0.5B`, `dataset=ag_news`, `num_labels=4`):
+**Run** (after saving a checkpoint with `model_name=Qwen/Qwen2.5-0.5B`, `dataset=ag_news`, `num_labels=4`):
 
 ```bash
 python run_downstream_generation.py \
   --checkpoint results/global_checkpoint \
   --probes data/ag_news_curated_10.json \
-  --output results/downstream_curated.jsonl \
-  --stable \
-  --write-seq-cls-argmax \
-  --prompt-style strict \
-  --strict-two-stage
-```
-
-**Strict single-pass (legacy / comparison only)**:
-
-```bash
-python run_downstream_generation.py \
-  --checkpoint results/global_checkpoint \
-  --probes data/ag_news_curated_10.json \
-  --output results/downstream_single_pass.jsonl \
-  --stable \
-  --write-seq-cls-argmax \
-  --prompt-style strict \
-  --single-pass-strict
-```
-
-**Two-stage strict with SeqCLS-fixed category** (optional **`--reason-only`**, requires **`--write-seq-cls-argmax`**):
-
-```bash
-python run_downstream_generation.py \
-  --checkpoint results/global_checkpoint \
-  --probes data/ag_news_curated_10.json \
-  --output results/downstream_reason_only.jsonl \
-  --stable \
-  --write-seq-cls-argmax \
-  --prompt-style strict \
-  --strict-two-stage \
-  --reason-only
-```
-
-**Short synthetic probes** (`ag_news_simple_probes.json` + `simple` template):
-
-```bash
-python run_downstream_generation.py \
-  --checkpoint results/global_checkpoint \
-  --probes data/ag_news_simple_probes.json \
   --output results/downstream_gen.jsonl \
-  --stable \
-  --write-seq-cls-argmax \
-  --prompt-style simple
+  --stable
 ```
 
-**Single checkpoint** (legacy defaults: sampling, up to 128 new tokens):
+**`--stable`** enables greedy decoding, `max_new_tokens=128`, `repetition_penalty=1.15`. Override with `--max-new-tokens`, `--repetition-penalty`, `--greedy`, or `--temperature`.
 
-```bash
-python run_downstream_generation.py \
-  --checkpoint results/global_checkpoint \
-  --probes data/financial_probes.json \
-  --output results/downstream_gen.jsonl \
-  --max-new-tokens 128
-```
+**JSONL fields**: `probe_id`, `news_text`, `seq_cls_category_id`, `seq_cls_category`, `completion` (`Category: ...\nReason: ...`), `reason_raw`, `reason_prompt`, and optional `dataset_label_id` / `dataset_category`.
 
-**Paired clean vs poisoned** (same probes, two checkpoints):
-
-```bash
-python run_downstream_generation.py \
-  --checkpoint results/global_checkpoint \
-  --compare-checkpoint results_baseline/global_checkpoint \
-  --probes data/ag_news_simple_probes.json \
-  --output results/downstream_compare.jsonl \
-  --stable \
-  --write-seq-cls-argmax \
-  --prompt-style simple
-```
-
-JSONL fields: `probe_id`, `news_text`, `question`, `prompt_style`, `generation_mode`, `completion_primary`. Task 2 label fields now use one naming scheme throughout:
-
-- `dataset_label_id`, `dataset_category`
-- `seq_cls_category_id`, `seq_cls_category`
-- `two_stage_category_id`, `two_stage_category`, `two_stage_category_source`
-- `two_stage_phase_a_raw`, `two_stage_reason_raw` for debugging
-- `parsed_category_id`, `parsed_category`, `parsed_reason` when **`--parse-strict-output`** is enabled
-
-With `--compare-checkpoint`, the second model adds `completion_compare` and `seq_cls_compare_*`. Use `--greedy` for greedy decoding without full `--stable`; `--base-model` overrides the HF id for CausalLM/tokenizer (only if it matches the saved architecture).
-
-**Observation tip**: the main artifact for studying poisoning effects is the full **`completion_primary`** (and optional **`completion_compare`**) next to **`seq_cls_*`** and dataset labels—not strict format compliance.
-
-**Parse retry note**: under **`--stable`**, the first attempt stays greedy; without retries, repeating generation would often duplicate the same text. After a failed parse, retries intentionally use sampling—tune **`--parse-retry-temperature`** if outputs are too noisy.
+**Observation tip**: compare `seq_cls_category` against `dataset_category` for classification accuracy; read `completion` / `reason_raw` for the CausalLM's explanation quality and potential poisoning effects.
 
 ### Adding another decoder family
 
