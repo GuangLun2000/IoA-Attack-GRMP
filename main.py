@@ -855,7 +855,7 @@ def main(config_overrides: Optional[Dict] = None):
         'num_benign_clients': None,  # Optional: Explicit number of benign clients for baseline experiment
                                     # If None, baseline will use (num_clients - num_attackers) to ensure fair comparison
                                     # If set, baseline experiment will use exactly this many benign clients
-        'num_rounds': 5,  # Total number of federated learning rounds (int)
+        'num_rounds': 1,  # Total number of federated learning rounds (int)
         
         # ========== Training Hyperparameters ==========
         'client_lr': 5e-5,  # Learning rate for local client training (float)
