@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Load a FedLLM SeqCLS checkpoint (NewsClassifierModel), transfer backbone to CausalLM,
-classify probes with the SeqCLS head, then generate a one-sentence explanation with the CausalLM.
+classify probes with the SeqCLS head, then generate an explanation with the CausalLM.
 
 Example:
   python run_downstream_generation.py \
@@ -263,20 +263,17 @@ def collect_seq_cls_predictions(
 
 def reason_prompt(news_text: str, category: str) -> str:
     """Build the prompt that asks the CausalLM to explain why the article fits *category*."""
-    cat_id = category_to_label_id(category)
     return (
-        f"Chosen category: {category} ({cat_id}).\n"
-        "Write one short English sentence explaining why the article fits this category.\n"
-        "Use only evidence from the article. Keep it under 25 words.\n"
-        "Output only the sentence. No prefix. No quotes.\n\n"
+        f"The following news article has been classified as: {category}.\n"
+        "Explain why this classification is appropriate based on the article content.\n\n"
         f"Article:\n{news_text}\n\n"
-        "Sentence:\n"
+        "Explanation:\n"
     )
 
 
 def clean_reason_text(text: str) -> str:
     rb = (text or "").strip()
-    rb = re.sub(r"^(reason|sentence)\s*:\s*", "", rb, flags=re.IGNORECASE)
+    rb = re.sub(r"^(reason|explanation)\s*:\s*", "", rb, flags=re.IGNORECASE)
     rb = rb.strip().strip("\"'").strip()
     return re.sub(r"\s+", " ", rb).strip()
 

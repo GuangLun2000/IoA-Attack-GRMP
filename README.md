@@ -100,7 +100,7 @@ python run_downstream_generation.py \
 
 **JSONL fields**: `probe_id`, `news_text`, `seq_cls_category_id`, `seq_cls_category`, `completion` (`Category: ...\nReason: ...`), `reason_raw`, `reason_prompt`, and optional `dataset_label_id` / `dataset_category`.
 
-**Observation tip**: compare `seq_cls_category` against `dataset_category` for classification accuracy; read `completion` / `reason_raw` for the CausalLM's explanation quality and potential poisoning effects.
+**Observation tip**: compare `seq_cls_category` against `dataset_category` for classification accuracy; read `reason_raw` for the CausalLM's explanation quality — coherent and evidence-based explanations indicate a healthy backbone, while off-topic drift, hallucination, or forced rationalization of wrong categories suggest poisoning effects.
 
 ### Adding another decoder family
 
