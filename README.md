@@ -1,7 +1,6 @@
 # IoA-Attack-GRMP
 
-[![arXiv](https://img.shields.io/badge/arXiv-2511.07176-b31b1b?style=for-the-badge&logo=arxiv&logoColor=white)](https://arxiv.org/abs/2511.07176)
-[![GitHub](https://img.shields.io/badge/GitHub-Code-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/GuangLun2000/IoA-Attack-GRMP)
+[![arXiv](https://img.shields.io/badge/arXiv-2511.07176-b31b1b?style=for-the-badge&logo=arxiv&logoColor=white)](https://arxiv.org/abs/2511.07176)    [![GitHub](https://img.shields.io/badge/GitHub-Code-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/GuangLun2000/IoA-Attack-GRMP)
 
 - **Graph Representation-based Model Poisoning on the Heterogeneous Internet of Agents**
 - [**Hanlin Cai**](https://caihanlin.com/), Houtianfu Wang, Haofan Dong, [Kai Li](https://sites.google.com/site/lukasunsw/), Sai Zou, [Ozgur B. Akan](https://oba.eco/)
@@ -21,7 +20,7 @@ Files and directories at the repository root:
 ├── client.py                          # BenignClient, AttackerClient (GRMP), baselines hook
 ├── server.py                          # Aggregation, evaluation, round orchestration
 ├── models.py                          # NewsClassifierModel, VGAE, etc.
-├── data_loader.py                     # DataManager / datasets (AG News, IMDB, DBpedia, Yahoo Answers)
+├── data_loader.py                     # DataManager / datasets (AG News, Yahoo Answers, IMDB, DBpedia)
 ├── fed_checkpoint.py                  # Save global model + metadata after FL
 ├── decoder_adapters.py                # SeqCLS backbone → CausalLM transfer adapters
 ├── run_downstream_generation.py       # CLI: checkpoint + probes → JSONL (Task 2)
