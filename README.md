@@ -1,30 +1,33 @@
 # IoA-Attack-GRMP
 
+- **Graph Representation-based Model Poisoning on the Heterogeneous Internet of Agents**
+- Presented in the 22nd International Wireless Communications & Mobile Computing Conference (IWCMC 2026).
+- arXiv: https://arxiv.org/abs/2511.07176
+
 ## File Structure
 
+Files and directories at the repository root:
+
 ```
-├── README.md                       # Project documentation (this file)
-├── requirements.txt                # Dependencies for the project
-├── main.py                         # Main experiment script: configures and runs FL 
-├── fed_checkpoint.py               # Save global NewsClassifierModel after FL (optional)
-├── decoder_adapters.py             # Pluggable SeqCLS → CausalLM backbone transfer
-├── run_downstream_generation.py    # CLI: load Fed checkpoint, generate on probe JSON
-├── client.py                       # Client logic (BenignClient, AttackerClient/GRMP)
-├── server.py                       # Server: model aggregation and evaluation
-├── models.py                       # Learning model definitions (NewsClassifierModel)
-├── data_loader.py                  # Data loading (AG News, IMDB, DBpedia, Yahoo Answers)
-├── data/financial_probes.json      # 10 finance-style probes (news + question) for downstream gen
-├── data/ag_news_simple_probes.json # 10 short probes: AG News 4-class label + concise explanation (downstream)
-├── data/ag_news_curated_10.json    # 10 real AG News rows (title+text), dataset_label_id / dataset_category
-├── data/ag_news_business_30.json   # 30 Business-category AG News probes for Task 2 (default)
-├── scripts/sample_ag_business_probes.py  # Optional: sample 10 AG News Business rows into JSON
-├── visualization.py                # Visualization module: generates figures
-├── attack_baseline_alie.py         # ALIE attack baseline (NeurIPS '19)
-├── attack_baseline_gaussian.py     # Gaussian attack baseline (USENIX Security '20)
-├── attack_baseline_sign_flipping.py# Sign-flipping attack baseline (ICML '18)
-├── GRMP_Attack_Colab.ipynb         # Google Colab notebook for interactive execution
-├── AG_News_Datasets/               # AG News local data (train.csv, test.csv)
-└── Yahoo_Answers_Datasets/         # Yahoo Answers local data (created on first run)
+.
+├── .gitignore
+├── LICENSE
+├── README.md                          # This documentation
+├── requirements.txt                   # Python dependencies
+├── main.py                            # Entry: configure and run federated learning
+├── client.py                          # BenignClient, AttackerClient (GRMP), baselines hook
+├── server.py                          # Aggregation, evaluation, round orchestration
+├── models.py                          # NewsClassifierModel, VGAE, etc.
+├── data_loader.py                     # DataManager / datasets (AG News, IMDB, DBpedia, Yahoo Answers)
+├── fed_checkpoint.py                  # Save global model + metadata after FL
+├── decoder_adapters.py                # SeqCLS backbone → CausalLM transfer adapters
+├── run_downstream_generation.py       # CLI: checkpoint + probes → JSONL (Task 2)
+├── visualization.py                   # Experiment figures / plots
+├── attack_baseline_alie.py            # ALIE baseline (NeurIPS ’19)
+├── attack_baseline_gaussian.py        # Gaussian baseline (USENIX Security ’20)
+├── attack_baseline_sign_flipping.py   # Sign-flipping baseline (ICML ’18)
+├── GRMP_Attack_Colab.ipynb            # Colab-oriented notebook
+└── data/                              # Datasets for Task 1 and Task 2
 ```
 
 ## Supported Models
