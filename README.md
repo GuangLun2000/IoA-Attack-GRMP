@@ -4,7 +4,22 @@
 
 - **Graph Representation-based Model Poisoning on the Heterogeneous Internet of Agents**
 - [**Hanlin Cai**](https://caihanlin.com/), Houtianfu Wang, Haofan Dong, [Kai Li](https://sites.google.com/site/lukasunsw/), Sai Zou, [Ozgur B. Akan](https://oba.eco/)
-- Presented in the 22nd International Wireless Communications & Mobile Computing Conference (IWCMC 2026).
+- Presented in the 22nd International Wireless Communications & Mobile Computing Conference (IWCMC 2026). Submitted to an IEEE Trans Journal.
+
+## Citation
+
+If this repository has been helpful to you, please consider citing our paper in your work. Thank you!
+
+```latex
+@article{cai2025graph,
+  title={Graph Representation-based Model Poisoning on the Heterogeneous Internet of Agents},
+  author={Cai, Hanlin and Wang, Houtianfu and Dong, Haofan and Li, Kai and Akan, Ozgur B},
+  journal={arXiv preprint arXiv:2511.07176},
+  year={2025}
+}
+```
+
+<br>
 
 ## File Structure
 
@@ -44,7 +59,7 @@
 - **DBpedia 14** (fancyzhx/dbpedia_14): `dataset='dbpedia'`, `num_labels=14`, `max_length=512` (14 topic classes, 560K train / 70K test)
 - Configure in `main.py` via `dataset`, `num_labels`, and `max_length`.
 
----
+<br>
 
 ## Install Dependencies
 
@@ -80,6 +95,8 @@ python main.py
 2. Enable GPU: Runtime → Change runtime type → GPU
 3. Run all cells: Runtime → Run all
 
+<br>
+
 ---
 
 ### Checkpoints and Task 2 (downstream generation)
@@ -102,15 +119,4 @@ python run_downstream_generation.py \
 
 **Other decoder families:** implement `DecoderAdapter` (`matches`, `transfer_backbone`), append to **`ADAPTER_REGISTRY`** in [`decoder_adapters.py`](decoder_adapters.py), then point Task 2 at checkpoints with the same **`model_name`**.
 
-## Citation
-
-If this repository has been helpful to you, please consider citing our work in your paper. Thank you so much!
-
-```latex
-@article{cai2025graph,
-  title={Graph Representation-based Model Poisoning on the Heterogeneous Internet of Agents},
-  author={Cai, Hanlin and Wang, Houtianfu and Dong, Haofan and Li, Kai and Akan, Ozgur B},
-  journal={arXiv preprint arXiv:2511.07176},
-  year={2025}
-}
-```
+<br>
